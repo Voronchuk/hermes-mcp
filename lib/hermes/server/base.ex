@@ -95,7 +95,7 @@ defmodule Hermes.Server.Base do
 
   defschema :parse_options, [
     {:module, {:required, {:custom, &Hermes.genserver_name/1}}},
-    {:init_arg, {:required, :any}},
+    {:init_arg, {:any, {:default, []}}},
     {:name, {:required, {:custom, &Hermes.genserver_name/1}}},
     {:transport, {:required, {:custom, &Hermes.server_transport/1}}}
   ]

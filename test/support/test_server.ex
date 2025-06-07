@@ -8,8 +8,8 @@ defmodule TestServer do
   alias Hermes.MCP.Error
 
   @impl true
-  def init(_) do
-    {:ok, %{}}
+  def init(_init_arg, frame) do
+    {:ok, frame}
   end
 
   @impl true

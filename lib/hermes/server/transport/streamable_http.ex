@@ -63,7 +63,6 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
 
   alias Hermes.Logging
   alias Hermes.MCP.Message
-  alias Hermes.Server.Registry
   alias Hermes.Telemetry
   alias Hermes.Transport.Behaviour, as: Transport
 
@@ -120,6 +119,71 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
   end
 
   @doc """
+  Creates a new session.
+
+  ## Parameters
+    * `transport` - The transport process
+
+  ## Returns
+    * `{:ok, session_id}` if session was created successfully
+    * `{:error, reason}` otherwise
+  """
+  @spec create_session(GenServer.server()) :: {:ok, String.t()} | {:error, term()}
+  def create_session(transport) do
+    GenServer.call(transport, :create_session)
+  end
+
+  @doc """
+  Sets the SSE connection for a session.
+
+  ## Parameters
+    * `transport` - The transport process
+    * `session_id` - The session ID
+    * `sse_pid` - The SSE handler process
+
+  ## Returns
+    * `:ok` if connection was set successfully
+    * `{:error, reason}` otherwise
+  """
+  @spec set_sse_connection(GenServer.server(), String.t(), pid()) :: :ok | {:error, term()}
+  def set_sse_connection(transport, session_id, sse_pid) do
+    GenServer.call(transport, {:set_sse_connection, session_id, sse_pid})
+  end
+
+  @doc """
+  Looks up session information.
+
+  ## Parameters
+    * `transport` - The transport process
+    * `session_id` - The session ID
+
+  ## Returns
+    * `{:ok, session_info}` if session exists
+    * `{:error, :not_found}` otherwise
+  """
+  @spec lookup_session(GenServer.server(), String.t()) :: {:ok, map()} | {:error, :not_found}
+  def lookup_session(transport, session_id) do
+    GenServer.call(transport, {:lookup_session, session_id})
+  end
+
+  @doc """
+  Handles a message for a specific session.
+
+  ## Parameters
+    * `transport` - The transport process
+    * `session_id` - The session ID
+    * `message` - The message to handle
+
+  ## Returns
+    * `{:ok, response}` if message was handled successfully
+    * `{:error, reason}` otherwise
+  """
+  @spec handle_message(GenServer.server(), String.t(), String.t()) :: {:ok, String.t()} | {:error, term()}
+  def handle_message(transport, session_id, message) do
+    GenServer.call(transport, {:handle_message, session_id, message})
+  end
+
+  @doc """
   Shuts down the transport connection.
 
   This terminates all active sessions managed by this transport.
@@ -157,17 +221,6 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
   @spec unregister_sse_handler(GenServer.server(), String.t()) :: :ok
   def unregister_sse_handler(transport, session_id) do
     GenServer.cast(transport, {:unregister_sse_handler, session_id})
-  end
-
-  @doc """
-  Handles an incoming message from a client.
-
-  Called by the Plug when a message is received via HTTP POST.
-  """
-  @spec handle_message(GenServer.server(), String.t(), map()) ::
-          {:ok, binary() | nil} | {:error, term()}
-  def handle_message(transport, session_id, message) do
-    GenServer.call(transport, {:handle_message, session_id, message})
   end
 
   @doc """
@@ -212,7 +265,9 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
     state = %{
       server: server,
       # Map of session_id => {pid, monitor_ref}
-      sse_handlers: %{}
+      sse_handlers: %{},
+      # Map of session_id => session_metadata
+      sessions: %{}
     }
 
     Logger.metadata(mcp_transport: :streamable_http, mcp_server: server)
@@ -243,26 +298,75 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
 
   @impl GenServer
   def handle_call({:handle_message, session_id, message}, _from, state) do
-    server = Registry.whereis_server(state.server)
+    # Check if session exists first
+    case Map.get(state.sessions, session_id) do
+      nil ->
+        {:reply, {:error, :session_not_found}, state}
+      
+      session_metadata ->
+        with {:ok, decoded_messages} <- Message.decode(message) do
+          server = state.server
+          
+          # Handle both single message and array of messages
+          decoded_message = case decoded_messages do
+            [single_message] -> single_message
+            _single_message when is_list(decoded_messages) -> {:error, :invalid_message_format}
+            single_message -> single_message
+          end
 
-    if Message.is_notification(message) do
-      GenServer.cast(server, {:notification, message, session_id})
-      {:reply, {:ok, nil}, state}
-    else
-      {:reply, forward_request_to_server(server, message, session_id), state}
+          case decoded_message do
+            {:error, reason} ->
+              {:reply, {:error, reason}, state}
+            
+            _ ->
+              # Update last activity
+              updated_metadata = Map.put(session_metadata, :last_activity, DateTime.utc_now())
+              updated_sessions = Map.put(state.sessions, session_id, updated_metadata)
+              updated_state = %{state | sessions: updated_sessions}
+              
+              if Message.is_notification(decoded_message) do
+                GenServer.cast(server, {:notification, decoded_message, session_id})
+                {:reply, {:ok, nil}, updated_state}
+              else
+                result = forward_request_to_server(server, decoded_message, session_id)
+                {:reply, result, updated_state}
+              end
+          end
+        else
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
   @impl GenServer
   def handle_call({:handle_message_for_sse, session_id, message}, _from, state) do
-    server = Registry.whereis_server(state.server)
+    with {:ok, decoded_messages} <- Message.decode(message) do
+      server = state.server
+      
+      # Handle both single message and array of messages
+      decoded_message = case decoded_messages do
+        [single_message] -> single_message
+        _single_message when is_list(decoded_messages) -> {:error, :invalid_message_format}
+        single_message -> single_message
+      end
 
-    if Message.is_notification(message) do
-      GenServer.cast(server, {:notification, message, session_id})
-      {:reply, {:ok, nil}, state}
+      case decoded_message do
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+        
+        _ ->
+          if Message.is_notification(decoded_message) do
+            GenServer.cast(server, {:notification, decoded_message, session_id})
+            {:reply, {:ok, nil}, state}
+          else
+            sse_handler? = Map.has_key?(state.sse_handlers, session_id)
+            {:reply, forward_request_to_server(server, decoded_message, session_id, sse_handler?), state}
+          end
+      end
     else
-      sse_handler? = Map.has_key?(state.sse_handlers, session_id)
-      {:reply, forward_request_to_server(server, message, session_id, sse_handler?), state}
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
     end
   end
 
@@ -288,16 +392,60 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
 
   @impl GenServer
   def handle_call({:send_message, message}, _from, state) do
-    Logging.transport_event("broadcast_notification", %{
-      message_size: byte_size(message),
-      active_handlers: map_size(state.sse_handlers)
-    })
+    if map_size(state.sse_handlers) == 0 do
+      {:reply, {:error, :no_active_session}, state}
+    else
+      Logging.transport_event("broadcast_notification", %{
+        message_size: byte_size(message),
+        active_handlers: map_size(state.sse_handlers)
+      })
 
-    for {_session_id, {pid, _ref}} <- state.sse_handlers do
-      send(pid, {:sse_message, message})
+      for {_session_id, {pid, _ref}} <- state.sse_handlers do
+        send(pid, {:sse_message, message})
+      end
+
+      {:reply, :ok, state}
     end
+  end
 
-    {:reply, :ok, state}
+  def handle_call(:create_session, _from, state) do
+    session_id = generate_session_id()
+    now = DateTime.utc_now()
+    session_metadata = %{
+      session_id: session_id,
+      server: state.server,
+      created_at: System.system_time(:second),
+      last_activity: now
+    }
+    sessions = Map.put(state.sessions, session_id, session_metadata)
+    {:reply, {:ok, session_id}, %{state | sessions: sessions}}
+  end
+
+  def handle_call({:set_sse_connection, session_id, sse_pid}, _from, state) do
+    case Map.get(state.sessions, session_id) do
+      nil ->
+        {:reply, {:error, :not_found}, state}
+      
+      session_metadata ->
+        ref = Process.monitor(sse_pid)
+        sse_handlers = Map.put(state.sse_handlers, session_id, {sse_pid, ref})
+        updated_metadata = Map.put(session_metadata, :sse_pid, sse_pid)
+        sessions = Map.put(state.sessions, session_id, updated_metadata)
+        {:reply, :ok, %{state | sse_handlers: sse_handlers, sessions: sessions}}
+    end
+  end
+
+  def handle_call({:lookup_session, session_id}, _from, state) do
+    case Map.get(state.sessions, session_id) do
+      session_metadata when is_map(session_metadata) ->
+        {:reply, {:ok, session_metadata}, state}
+      nil ->
+        {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  defp generate_session_id do
+    :crypto.strong_rand_bytes(16) |> Base.encode64(padding: false)
   end
 
   defp forward_request_to_server(server, message, session_id, has_sse_handler \\ false) do

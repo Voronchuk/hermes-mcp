@@ -10,13 +10,13 @@ defmodule Hermes.Server.BaseTest do
 
   describe "start_link/1" do
     test "starts a server with valid options" do
-      assert {:ok, pid} = Base.start_link(module: TestServer, transport: [layer: MCPTest.MockTransport])
+      assert {:ok, pid} = Base.start_link(module: TestServer, name: :test_server, transport: [layer: MCPTest.MockTransport, name: :test_transport])
       assert Process.alive?(pid)
     end
 
     test "starts a named server" do
       assert {:ok, _pid} =
-               Base.start_link(module: TestServer, name: :named_server, transport: [layer: MCPTest.MockTransport])
+               Base.start_link(module: TestServer, name: :named_server, transport: [layer: MCPTest.MockTransport, name: :named_transport])
 
       assert pid = Process.whereis(:named_server)
       assert Process.alive?(pid)
