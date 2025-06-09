@@ -341,7 +341,7 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
 
   @impl GenServer
   def handle_call({:handle_message_for_sse, session_id, message}, _from, state) do
-    with {:ok, decoded_messages} <- Message.decode(message) do
+    with {:ok, decoded_messages} <- decode_message(message) do
       server = state.server
       
       # Handle both single message and array of messages
@@ -441,6 +441,17 @@ defmodule Hermes.Server.Transport.StreamableHTTP do
         {:reply, {:ok, session_metadata}, state}
       nil ->
         {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  defp decode_message(message) when is_binary(message) do
+    Message.decode(message)
+  end
+
+  defp decode_message(message) when is_map(message) do
+    case Message.validate_message(message) do
+      {:ok, validated_message} -> {:ok, [validated_message]}
+      {:error, _} -> {:error, :invalid_message}
     end
   end
 

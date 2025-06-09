@@ -85,6 +85,9 @@ defmodule Hermes.Server.Transport.StreamableHTTPTest do
     end
 
     test "send_message/2 works", %{transport: transport} do
+      session_id = "test-session-send"
+      assert :ok = StreamableHTTP.register_sse_handler(transport, session_id)
+      
       message = "test message"
       assert :ok = StreamableHTTP.send_message(transport, message)
     end
