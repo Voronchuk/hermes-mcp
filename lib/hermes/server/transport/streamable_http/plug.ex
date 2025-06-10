@@ -95,7 +95,7 @@ defmodule Hermes.Server.Transport.StreamableHTTP.Plug do
 
   defp handle_get(conn, %{transport: transport, session_header: session_header}) do
     if wants_sse?(conn) do
-      session_id = get_or_create_session_id(conn, session_header)
+      session_id = get_or_create_session_id(conn, session_header, transport)
 
       case StreamableHTTP.register_sse_handler(transport, session_id) do
         :ok ->
@@ -115,11 +115,11 @@ defmodule Hermes.Server.Transport.StreamableHTTP.Plug do
   defp handle_post(conn, %{transport: transport, session_header: session_header} = opts) do
     with {:ok, body, conn} <- maybe_read_request_body(conn, opts),
          {:ok, [messages]} <- maybe_parse_messages(body) do
-      session_id = determine_session_id(conn, session_header, messages)
+      session_id = determine_session_id(conn, session_header, transport, messages)
 
       # if Enum.any?(messages, &Message.is_request/1) do
       if Message.is_request(messages) do
-        handle_request_with_possible_sse(conn, transport, session_id, messages, session_header)
+        handle_request_with_possible_sse(conn, transport, session_id, body, session_header)
       else
         case StreamableHTTP.handle_message(transport, session_id, messages) do
           {:ok, _} ->
@@ -267,23 +267,31 @@ defmodule Hermes.Server.Transport.StreamableHTTP.Plug do
     |> String.contains?("text/event-stream")
   end
 
-  defp get_or_create_session_id(conn, session_header) do
+  defp get_or_create_session_id(conn, session_header, transport) do
     case get_req_header(conn, session_header) do
       [session_id] when is_binary(session_id) and session_id != "" ->
-        session_id
+        # Verify session exists in transport, create if not
+        case StreamableHTTP.lookup_session(transport, session_id) do
+          {:ok, _session} -> session_id
+          {:error, :not_found} -> 
+            {:ok, new_session_id} = StreamableHTTP.create_session(transport)
+            new_session_id
+        end
 
       _ ->
-        ID.generate_session_id()
+        {:ok, session_id} = StreamableHTTP.create_session(transport)
+        session_id
     end
   end
 
   # initialize request can't be batched
-  defp determine_session_id(_conn, _header, [message]) when Message.is_initialize(message) do
-    ID.generate_session_id()
+  defp determine_session_id(_conn, _header, transport, [message]) when Message.is_initialize(message) do
+    {:ok, session_id} = StreamableHTTP.create_session(transport)
+    session_id
   end
 
-  defp determine_session_id(conn, session_header, _messages) do
-    get_or_create_session_id(conn, session_header)
+  defp determine_session_id(conn, session_header, transport, _messages) do
+    get_or_create_session_id(conn, session_header, transport)
   end
 
   defp maybe_parse_messages(body) when is_binary(body) do
