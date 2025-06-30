@@ -55,7 +55,7 @@ defmodule Hermes.Server do
   alias Hermes.Server.Handlers
 
   @server_capabilities ~w(prompts tools resources logging)a
-  @protocol_versions ~w(2025-03-26 2024-05-11 2024-10-07)
+  @protocol_versions ~w(2025-03-26 2024-11-05 2024-10-07)
 
   @doc """
   Starts a server with its supervision tree.
@@ -64,9 +64,9 @@ defmodule Hermes.Server do
 
       # Start with default options
       Hermes.Server.start_link(MyServer, :ok, transport: :stdio)
-      
+
       # Start with custom name
-      Hermes.Server.start_link(MyServer, %{}, 
+      Hermes.Server.start_link(MyServer, %{},
         transport: :stdio,
         name: {:local, :my_server}
       )
@@ -148,7 +148,7 @@ defmodule Hermes.Server do
 
       # Register with auto-derived name
       component MyServer.Tools.Calculator
-      
+
       # Register with custom name
       component MyServer.Tools.FileManager, name: "files"
   """
