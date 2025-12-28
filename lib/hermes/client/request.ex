@@ -1,15 +1,5 @@
 defmodule Hermes.Client.Request do
-  @moduledoc """
-  Represents a pending request in the MCP client.
-
-  This struct encapsulates all information about an in-progress request:
-  - `id` - The unique request ID
-  - `method` - The MCP method being called
-  - `from` - The GenServer caller reference
-  - `timer_ref` - Reference to the request-specific timeout timer
-  - `start_time` - When the request started (monotonic time in milliseconds)
-  - `batch_id` - The batch ID if this request is part of a batch (nil for single requests)
-  """
+  @moduledoc false
 
   @type t :: %__MODULE__{
           id: String.t(),
@@ -17,10 +7,10 @@ defmodule Hermes.Client.Request do
           from: GenServer.from(),
           timer_ref: reference(),
           start_time: integer(),
-          batch_id: String.t() | nil
+          params: map()
         }
 
-  defstruct [:id, :method, :from, :timer_ref, :start_time, batch_id: nil]
+  defstruct [:id, :method, :from, :timer_ref, :start_time, :params]
 
   @doc """
   Creates a new request struct.
@@ -32,14 +22,13 @@ defmodule Hermes.Client.Request do
       * `:method` - The MCP method name
       * `:from` - The GenServer caller reference
       * `:timer_ref` - Reference to the request-specific timeout timer
-      * `:batch_id` - Optional batch ID if part of a batch request
   """
   @spec new(%{
           id: String.t(),
           method: String.t(),
           from: GenServer.from(),
           timer_ref: reference(),
-          batch_id: String.t() | nil
+          params: map()
         }) :: t()
   def new(attrs) do
     %__MODULE__{
@@ -47,7 +36,7 @@ defmodule Hermes.Client.Request do
       method: attrs.method,
       from: attrs.from,
       timer_ref: attrs.timer_ref,
-      batch_id: Map.get(attrs, :batch_id),
+      params: attrs.params,
       start_time: System.monotonic_time(:millisecond)
     }
   end

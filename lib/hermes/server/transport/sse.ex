@@ -2,6 +2,19 @@ defmodule Hermes.Server.Transport.SSE do
   @moduledoc """
   SSE (Server-Sent Events) transport implementation for MCP servers.
 
+  > #### Deprecated {: .warning}
+  >
+  > This transport has been deprecated as of MCP specification 2025-03-26 in favor
+  > of the Streamable HTTP transport (`Hermes.Server.Transport.StreamableHTTP`).
+  >
+  > The HTTP+SSE transport from protocol version 2024-11-05 has been replaced by
+  > the more flexible Streamable HTTP transport which supports optional SSE streaming
+  > on a single endpoint.
+  >
+  > For new implementations, please use `Hermes.Server.Transport.StreamableHTTP` instead.
+  > This module is maintained for backward compatibility with clients using the
+  > 2024-11-05 protocol version.
+
   This module provides backward compatibility with the HTTP+SSE transport
   from MCP protocol version 2024-11-05. It supports multiple concurrent
   client sessions through Server-Sent Events for server-to-client communication
@@ -54,15 +67,17 @@ defmodule Hermes.Server.Transport.SSE do
   @behaviour Hermes.Transport.Behaviour
 
   use GenServer
+  use Hermes.Logging
 
   import Peri
 
-  alias Hermes.Logging
   alias Hermes.MCP.Message
   alias Hermes.Telemetry
   alias Hermes.Transport.Behaviour, as: Transport
 
   require Message
+
+  @deprecated "Use Hermes.Server.Transport.StreamableHTTP instead"
 
   @type t :: GenServer.server()
 
@@ -81,13 +96,14 @@ defmodule Hermes.Server.Transport.SSE do
           | {:post_path, String.t()}
           | GenServer.option()
 
-  defschema :parse_options, [
+  defschema(:parse_options, [
     {:server, {:required, Hermes.get_schema(:process_name)}},
     {:name, {:required, {:custom, &Hermes.genserver_name/1}}},
     {:base_url, {:string, {:default, ""}}},
     {:post_path, {:string, {:default, "/messages"}}},
-    {:registry, {:atom, {:default, Hermes.Server.Registry}}}
-  ]
+    {:registry, {:atom, {:default, Hermes.Server.Registry}}},
+    {:request_timeout, {:integer, {:default, to_timeout(second: 30)}}}
+  ])
 
   @doc """
   Starts the SSE transport.
@@ -115,8 +131,8 @@ defmodule Hermes.Server.Transport.SSE do
     * `{:error, reason}` otherwise
   """
   @impl Transport
-  @spec send_message(GenServer.server(), binary()) :: :ok | {:error, term()}
-  def send_message(transport, message) when is_binary(message) do
+  @spec send_message(GenServer.server(), binary(), keyword()) :: :ok | {:error, term()}
+  def send_message(transport, message, _opts \\ []) when is_binary(message) do
     GenServer.call(transport, {:send_message, message})
   end
 
@@ -145,7 +161,8 @@ defmodule Hermes.Server.Transport.SSE do
   Called by the Plug when establishing an SSE connection.
   The calling process becomes the SSE handler for the session.
   """
-  @spec register_sse_handler(GenServer.server(), String.t()) :: :ok | {:error, term()}
+  @spec register_sse_handler(GenServer.server(), String.t()) ::
+          :ok | {:error, term()}
   def register_sse_handler(transport, session_id) do
     GenServer.call(transport, {:register_sse_handler, session_id, self()})
   end
@@ -187,7 +204,8 @@ defmodule Hermes.Server.Transport.SSE do
 
   Used for targeted server notifications to specific clients.
   """
-  @spec route_to_session(GenServer.server(), String.t(), binary()) :: :ok | {:error, term()}
+  @spec route_to_session(GenServer.server(), String.t(), binary()) ::
+          :ok | {:error, term()}
   def route_to_session(transport, session_id, message) do
     GenServer.call(transport, {:route_to_session, session_id, message})
   end
@@ -213,6 +231,7 @@ defmodule Hermes.Server.Transport.SSE do
       base_url: Map.get(opts, :base_url, ""),
       post_path: Map.get(opts, :post_path, "/messages"),
       registry: opts.registry,
+      request_timeout: opts.request_timeout,
       # Map of session_id => {pid, monitor_ref}
       sse_handlers: %{}
     }
@@ -246,30 +265,19 @@ defmodule Hermes.Server.Transport.SSE do
   @impl GenServer
   def handle_call({:handle_message, session_id, message, context}, _from, state) when is_map(message) do
     server = state.registry.whereis_server(state.server)
+    timeout = state.request_timeout
 
     if Message.is_notification(message) do
       GenServer.cast(server, {:notification, message, session_id, context})
       {:reply, {:ok, nil}, state}
     else
-      case forward_request_to_server(server, message, session_id, context) do
+      case forward_request_to_server(server, message, session_id, context, timeout) do
         {:ok, response} ->
           maybe_send_through_sse(response, session_id, state)
 
         {:error, reason} ->
           {:reply, {:error, reason}, state}
       end
-    end
-  end
-
-  def handle_call({:handle_message, session_id, messages, context}, _from, state) when is_list(messages) do
-    server = state.registry.whereis_server(state.server)
-
-    with {:batch, responses} <- forward_batch_to_server(server, messages, session_id, context),
-         {:ok, encoded} <- Message.encode_batch(responses) do
-      maybe_send_through_sse(encoded, session_id, state)
-    else
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
     end
   end
 
@@ -330,33 +338,25 @@ defmodule Hermes.Server.Transport.SSE do
     end
   end
 
-  defp forward_request_to_server(server, message, session_id, context) do
-    case GenServer.call(server, {:request, message, session_id, context}) do
+  defp forward_request_to_server(server, message, session_id, context, timeout) do
+    msg = {:request, message, session_id, context}
+
+    case GenServer.call(server, msg, timeout) do
       {:ok, response} ->
         {:ok, response}
 
       {:error, reason} ->
-        Logging.transport_event("server_error", %{reason: reason, session_id: session_id}, level: :error)
+        Logging.transport_event(
+          "server_error",
+          %{reason: reason, session_id: session_id},
+          level: :error
+        )
+
         {:error, reason}
     end
   catch
     :exit, reason ->
       Logging.transport_event("server_call_failed", %{reason: reason}, level: :error)
-      {:error, :server_unavailable}
-  end
-
-  defp forward_batch_to_server(server, messages, session_id, context) do
-    case GenServer.call(server, {:batch_request, messages, session_id, context}) do
-      {:batch, responses} ->
-        {:batch, responses}
-
-      {:error, reason} ->
-        Logging.transport_event("batch_server_error", %{reason: reason, session_id: session_id}, level: :error)
-        {:error, reason}
-    end
-  catch
-    :exit, reason ->
-      Logging.transport_event("batch_server_call_failed", %{reason: reason}, level: :error)
       {:error, :server_unavailable}
   end
 

@@ -1,19 +1,5 @@
 defmodule Hermes.Server.Session do
-  @moduledoc """
-  Manages state for the Hermes MCP server base implementation.
-
-  This module provides a structured representation of server state during the MCP lifecycle,
-  including initialization status, protocol negotiation, and server capabilities.
-
-  ## State Structure
-
-  Each server state includes:
-  - `protocol_version`: Negotiated MCP protocol version
-  - `frame`: Server frame (similar to LiveView socket)
-  - `initialized`: Whether the server has completed initialization
-  - `client_info`: Client information received during initialization
-  - `client_capabilities`: Client capabilities received during initialization
-  """
+  @moduledoc false
 
   use Agent, restart: :transient
 
@@ -25,7 +11,9 @@ defmodule Hermes.Server.Session do
           client_capabilities: map() | nil,
           log_level: String.t(),
           id: String.t() | nil,
-          pending_requests: %{String.t() => %{started_at: integer(), method: String.t()}}
+          pending_requests: %{
+            String.t() => %{started_at: integer(), method: String.t()}
+          }
         }
 
   defstruct [
@@ -52,40 +40,17 @@ defmodule Hermes.Server.Session do
 
   @doc """
   Creates a new server state with the given options.
-
-  ## Parameters
-
-    * `opts` - Map containing the initialization options
   """
   @spec new(Enumerable.t()) :: t()
   def new(opts), do: struct(__MODULE__, opts)
 
   @doc """
   Guard to check if a session has been initialized.
-
-  ## Examples
-
-      iex> session = %Session{initialized: true}
-      iex> is_initialized(session)
-      true
   """
   defguard is_initialized(session) when session.initialized
 
   @doc """
   Retrieves the current state of a session.
-
-  ## Parameters
-
-    * `session` - The session agent name or PID
-
-  ## Returns
-
-  The current session state as a `%Session{}` struct.
-
-  ## Examples
-
-      iex> session_state = Session.get(session_name)
-      %Session{initialized: true, protocol_version: "2025-03-26"}
   """
   @spec get(GenServer.name()) :: t
   def get(session) do
@@ -99,25 +64,16 @@ defmodule Hermes.Server.Session do
   1. Sets the negotiated protocol version
   2. Stores client information and capabilities
   3. Marks the server as initialized
-
-  ## Parameters
-
-    * `state` - The current server state
-    * `protocol_version` - The negotiated protocol version
-    * `client_info` - Client information from the initialize request
-    * `client_capabilities` - Client capabilities from the initialize request
-
-  ## Examples
-
-      iex> client_info = %{"name" => "hello", "version" => "1.0.0"}
-      iex> capabilities = %{"sampling" => %{}}
-      iex> Hermes.Server.Session.update_from_initialization(session, "2025-03-26", client_info, capabilities)
-      :ok
   """
   @spec update_from_initialization(GenServer.name(), String.t(), map, map) :: :ok
   def update_from_initialization(session, negotiated_version, client_info, capabilities) do
     Agent.update(session, fn state ->
-      %{state | protocol_version: negotiated_version, client_info: client_info, client_capabilities: capabilities}
+      %{
+        state
+        | protocol_version: negotiated_version,
+          client_info: client_info,
+          client_capabilities: capabilities
+      }
     end)
   end
 
@@ -139,17 +95,6 @@ defmodule Hermes.Server.Session do
 
   @doc """
   Tracks a new pending request in the session.
-
-  ## Parameters
-
-    * `session` - The session agent name or PID
-    * `request_id` - The unique request ID
-    * `method` - The MCP method being called
-
-  ## Examples
-
-      iex> Session.track_request(session, "req_123", "tools/call")
-      :ok
   """
   @spec track_request(GenServer.name(), String.t(), String.t()) :: :ok
   def track_request(session, request_id, method) do
@@ -159,26 +104,15 @@ defmodule Hermes.Server.Session do
         method: method
       }
 
-      %{state | pending_requests: Map.put(state.pending_requests, request_id, request_info)}
+      %{
+        state
+        | pending_requests: Map.put(state.pending_requests, request_id, request_info)
+      }
     end)
   end
 
   @doc """
   Removes a completed request from tracking.
-
-  ## Parameters
-
-    * `session` - The session agent name or PID
-    * `request_id` - The request ID to remove
-
-  ## Returns
-
-  The request info if found, nil otherwise.
-
-  ## Examples
-
-      iex> Session.complete_request(session, "req_123")
-      %{started_at: 1234567890, method: "tools/call"}
   """
   @spec complete_request(GenServer.name(), String.t()) :: map() | nil
   def complete_request(session, request_id) do
@@ -190,16 +124,6 @@ defmodule Hermes.Server.Session do
 
   @doc """
   Checks if a request is currently pending.
-
-  ## Parameters
-
-    * `session` - The session agent name or PID
-    * `request_id` - The request ID to check
-
-  ## Examples
-
-      iex> Session.has_pending_request?(session, "req_123")
-      true
   """
   @spec has_pending_request?(GenServer.name(), String.t()) :: boolean()
   def has_pending_request?(session, request_id) do
@@ -210,18 +134,26 @@ defmodule Hermes.Server.Session do
 
   @doc """
   Gets all pending requests for a session.
-
-  ## Parameters
-
-    * `session` - The session agent name or PID
-
-  ## Examples
-
-      iex> Session.get_pending_requests(session)
-      %{"req_123" => %{started_at: 1234567890, method: "tools/call"}}
   """
   @spec get_pending_requests(GenServer.name()) :: map()
   def get_pending_requests(session) do
     Agent.get(session, & &1.pending_requests)
+  end
+end
+
+defimpl Inspect, for: Hermes.Server.Session do
+  import Inspect.Algebra
+
+  def inspect(session, opts) do
+    info = [
+      id: session.id,
+      initialized: session.initialized,
+      pending_requests: map_size(session.pending_requests)
+    ]
+
+    info = if session.protocol_version, do: [{:protocol_version, session.protocol_version} | info], else: info
+    info = if session.client_info, do: [{:client_info, session.client_info["name"] || "unknown"} | info], else: info
+
+    concat(["#Session<", to_doc(info, opts), ">"])
   end
 end

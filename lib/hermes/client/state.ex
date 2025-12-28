@@ -18,6 +18,7 @@ defmodule Hermes.Client.State do
           pending_requests: %{String.t() => Request.t()},
           progress_callbacks: %{String.t() => Base.progress_callback()},
           log_callback: Base.log_callback() | nil,
+          sampling_callback: (map() -> {:ok, map()} | {:error, String.t()}) | nil,
           # Use a map with URI as key for faster access
           roots: %{String.t() => Base.root()}
         }
@@ -32,39 +33,10 @@ defmodule Hermes.Client.State do
     pending_requests: %{},
     progress_callbacks: %{},
     log_callback: nil,
+    sampling_callback: nil,
     roots: %{}
   ]
 
-  @doc """
-  Creates a new client state with the given options.
-
-  ## Parameters
-
-    * `opts` - Map containing the initialization options
-
-  ## Options
-
-    * `:client_info` - Information about the client (required)
-    * `:capabilities` - Client capabilities to advertise
-    * `:protocol_version` - Protocol version to use
-    * `:request_timeout` - Default timeout for requests in milliseconds
-    * `:transport` - Transport configuration
-
-  ## Examples
-
-      iex> Hermes.Client.State.new(%{
-      ...>   client_info: %{"name" => "MyClient", "version" => "1.0.0"},
-      ...>   capabilities: %{"resources" => %{}},
-      ...>   protocol_version: "2024-11-05",
-      ...>   transport: %{layer: Hermes.Transport.SSE, name: MyTransport}
-      ...> })
-      %Hermes.Client.State{
-        client_info: %{"name" => "MyClient", "version" => "1.0.0"},
-        capabilities: %{"resources" => %{}},
-        protocol_version: "2024-11-05",
-        transport: %{layer: Hermes.Transport.SSE, name: MyTransport}
-      }
-  """
   @spec new(map()) :: t()
   def new(opts) do
     %__MODULE__{
@@ -75,37 +47,15 @@ defmodule Hermes.Client.State do
     }
   end
 
-  @doc """
-  Adds a new request to the state from an Operation and returns the request ID and updated state.
-
-  This function:
-  1. Processes the operation details
-  2. Creates a new request with a unique ID
-  3. Sets up the timeout timer
-  4. Registers any progress callbacks
-  5. Updates the state with the new request
-
-  ## Parameters
-
-    * `state` - The current client state
-    * `operation` - The operation to perform
-    * `from` - The GenServer.from for the caller
-
-  ## Examples
-
-      iex> operation = Operation.new(%{method: "ping", params: %{}})
-      iex> {req_id, updated_state} = Hermes.Client.State.add_request_from_operation(state, operation, {pid, ref})
-      iex> is_binary(req_id)
-      true
-      iex> map_size(updated_state.pending_requests) > map_size(state.pending_requests)
-      true
-  """
-  @spec add_request_from_operation(t(), Operation.t(), GenServer.from(), String.t() | nil) :: {String.t(), t()}
-  def add_request_from_operation(state, %Operation{} = operation, from, batch_id \\ nil) do
+  @spec add_request_from_operation(t(), Operation.t(), GenServer.from()) ::
+          {String.t(), t()}
+  def add_request_from_operation(state, %Operation{} = operation, from) do
     state = register_progress_callback_from_opts(state, operation.progress_opts)
 
     request_id = ID.generate_request_id()
-    timer_ref = Process.send_after(self(), {:request_timeout, request_id}, operation.timeout)
+
+    timer_ref =
+      Process.send_after(self(), {:request_timeout, request_id}, operation.timeout)
 
     request =
       Request.new(%{
@@ -113,7 +63,7 @@ defmodule Hermes.Client.State do
         method: operation.method,
         from: from,
         timer_ref: timer_ref,
-        batch_id: batch_id
+        params: operation.params
       })
 
     pending_requests = Map.put(state.pending_requests, request_id, request)
@@ -144,7 +94,8 @@ defmodule Hermes.Client.State do
   @spec register_progress_callback_from_opts(t(), keyword() | nil) :: t()
   def register_progress_callback_from_opts(state, progress_opts) do
     with {:ok, opts} when not is_nil(opts) <- {:ok, progress_opts},
-         {:ok, callback} when is_function(callback, 3) <- {:ok, Keyword.get(opts, :callback)},
+         {:ok, callback} when is_function(callback, 3) <-
+           {:ok, Keyword.get(opts, :callback)},
          {:ok, token} when not is_nil(token) <- {:ok, Keyword.get(opts, :token)} do
       register_progress_callback(state, token, callback)
     else
@@ -600,42 +551,60 @@ defmodule Hermes.Client.State do
   end
 
   @doc """
-  Gets all requests for a specific batch ID.
+  Sets the sampling callback function.
 
   ## Parameters
 
     * `state` - The current client state
-    * `batch_id` - The batch ID to filter by
+    * `callback` - The callback function to handle sampling requests
 
   ## Examples
 
-      iex> requests = Hermes.Client.State.get_batch_requests(state, "batch_123")
-      iex> Enum.all?(requests, &(&1.batch_id == "batch_123"))
+      iex> callback = fn params -> {:ok, %{role: "assistant", content: %{type: "text", text: "Hello"}}} end
+      iex> updated_state = Hermes.Client.State.set_sampling_callback(state, callback)
+      iex> is_function(updated_state.sampling_callback, 1)
       true
   """
-  @spec get_batch_requests(t(), String.t()) :: [Request.t()]
-  def get_batch_requests(state, batch_id) do
-    state.pending_requests
-    |> Map.values()
-    |> Enum.filter(&(&1.batch_id == batch_id))
+  @spec set_sampling_callback(t(), (map() -> {:ok, map()} | {:error, String.t()})) ::
+          t()
+  def set_sampling_callback(state, callback) when is_function(callback, 1) do
+    %{state | sampling_callback: callback}
   end
 
   @doc """
-  Checks if all requests in a batch have been completed.
+  Gets the sampling callback function.
 
   ## Parameters
 
     * `state` - The current client state
-    * `batch_id` - The batch ID to check
 
   ## Examples
 
-      iex> Hermes.Client.State.batch_complete?(state, "batch_123")
-      true
+      iex> Hermes.Client.State.get_sampling_callback(state)
+      nil
   """
-  @spec batch_complete?(t(), String.t()) :: boolean()
-  def batch_complete?(state, batch_id) do
-    get_batch_requests(state, batch_id) == []
+  @spec get_sampling_callback(t()) ::
+          (map() -> {:ok, map()} | {:error, String.t()}) | nil
+  def get_sampling_callback(state) do
+    state.sampling_callback
+  end
+
+  @doc """
+  Clears the sampling callback function.
+
+  ## Parameters
+
+    * `state` - The current client state
+
+  ## Examples
+
+      iex> updated_state = Hermes.Client.State.clear_sampling_callback(state)
+      iex> updated_state.sampling_callback
+      nil
+  """
+  @spec clear_sampling_callback(t()) :: t()
+  def clear_sampling_callback(state) do
+    %{state | sampling_callback: nil}
   end
 
   # Helper functions

@@ -6,7 +6,12 @@ defmodule StubServer do
   This server has no components and provides only the bare minimum implementation.
   """
 
-  use Hermes.Server, name: "Test Server", version: "1.0.0", capabilities: [:tools, :prompts, :resources]
+  use Hermes.Server,
+    name: "Test Server",
+    version: "1.0.0",
+    capabilities: [:tools, :prompts, :resources]
+
+  import Hermes.Server.Frame, only: [assign: 3]
 
   alias Hermes.MCP.Error
   alias Hermes.Server.Response
@@ -17,7 +22,9 @@ defmodule StubServer do
       "description" => "greets someone",
       "inputSchema" => %{
         "type" => "object",
-        "properties" => %{"name" => %{"type" => "string", "description" => "for whom to greet"}},
+        "properties" => %{
+          "name" => %{"type" => "string", "description" => "for whom to greet"}
+        },
         "required" => ["name"]
       }
     }
@@ -46,15 +53,6 @@ defmodule StubServer do
     }
   ]
 
-  def start_link(opts) do
-    Hermes.Server.start_link(__MODULE__, :ok, opts)
-  end
-
-  @impl true
-  def init(:ok, frame) do
-    {:ok, frame}
-  end
-
   @impl true
   def handle_request(%{"method" => "ping"}, frame) do
     {:reply, %{}, frame}
@@ -77,7 +75,7 @@ defmodule StubServer do
   def handle_request(%{"method" => "resources/" <> action, "params" => params}, frame) do
     case action do
       "list" -> {:reply, %{"resources" => @resources}, frame}
-      "read" -> handle_resource_read(params, frame)
+      "read" -> handle_read_resource(params, frame)
     end
   end
 
@@ -87,6 +85,13 @@ defmodule StubServer do
 
   @impl true
   def handle_notification(_notification, frame) do
+    {:noreply, frame}
+  end
+
+  @impl true
+  def handle_sampling(response, request_id, frame) do
+    frame = assign(frame, :last_sampling_response, response)
+    frame = assign(frame, :last_sampling_request_id, request_id)
     {:noreply, frame}
   end
 
@@ -101,7 +106,7 @@ defmodule StubServer do
     {:error, Error.protocol(:invalid_request, %{message: "tool #{name} not found"}), frame}
   end
 
-  defp handle_resource_read(%{"uri" => uri}, frame) do
+  defp handle_read_resource(%{"uri" => uri}, frame) do
     Response.resource()
     |> Response.text("some teste config")
     |> Response.to_protocol(uri, "text/plain")

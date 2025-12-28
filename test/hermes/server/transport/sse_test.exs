@@ -48,7 +48,9 @@ defmodule Hermes.Server.Transport.SSETest do
     setup do
       registry = Hermes.Server.Registry
       name = registry.transport(StubServer, :sse)
-      {:ok, transport} = start_supervised({SSE, server: StubServer, name: name, registry: registry})
+
+      {:ok, transport} =
+        start_supervised({SSE, server: StubServer, name: name, registry: registry})
 
       %{transport: transport, server: StubServer}
     end
@@ -65,10 +67,16 @@ defmodule Hermes.Server.Transport.SSETest do
 
     test "handle_message processes notifications", %{transport: transport} do
       session_id = "test-session-456"
-      notification = build_notification("notifications/message", %{"level" => "info", "data" => "test"})
+
+      notification =
+        build_notification("notifications/message", %{
+          "level" => "info",
+          "data" => "test"
+        })
 
       # Should return nil for notifications and send them to server
-      assert {:ok, nil} = SSE.handle_message(transport, session_id, notification, %{})
+      assert {:ok, nil} =
+               SSE.handle_message(transport, session_id, notification, %{})
     end
 
     test "routes messages to specific sessions", %{transport: transport} do
@@ -92,7 +100,8 @@ defmodule Hermes.Server.Transport.SSETest do
       session_id = "nonexistent-session"
       message = "test message"
 
-      assert {:error, :no_sse_handler} = SSE.route_to_session(transport, session_id, message)
+      assert {:error, :no_sse_handler} =
+               SSE.route_to_session(transport, session_id, message)
     end
 
     test "broadcasts messages to all handlers", %{transport: transport} do
@@ -117,7 +126,7 @@ defmodule Hermes.Server.Transport.SSETest do
       assert_receive :registered, 1000
 
       message = "broadcast message"
-      assert :ok = SSE.send_message(transport, message)
+      assert :ok = SSE.send_message(transport, message, [])
 
       # Both handlers should receive the message
       assert_receive {:sse_message, ^message}

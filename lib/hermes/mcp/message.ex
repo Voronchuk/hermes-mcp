@@ -9,7 +9,7 @@ defmodule Hermes.MCP.Message do
 
   # MCP message schemas
 
-  @request_methods ~w(initialize ping resources/list resources/read prompts/get prompts/list tools/call tools/list logging/setLevel completion/complete roots/list)
+  @request_methods ~w(initialize ping resources/list resources/read prompts/get prompts/list tools/call tools/list logging/setLevel completion/complete roots/list sampling/createMessage)
 
   @init_params_schema %{
     "protocolVersion" => {:required, :string},
@@ -80,30 +80,82 @@ defmodule Hermes.MCP.Message do
     }
   }
 
-  defschema :request_schema, %{
+  @text_content_schema %{
+    "type" => {:required, {:literal, "text"}},
+    "text" => {:required, :string}
+  }
+
+  @image_content_schema %{
+    "type" => {:required, {:literal, "image"}},
+    "data" => {:required, :string},
+    "mimeType" => {:required, :string}
+  }
+
+  @audio_content_schema %{
+    "type" => {:required, {:literal, "audio"}},
+    "data" => {:required, :string},
+    "mimeType" => {:required, :string}
+  }
+
+  @message_schema %{
+    "role" => {:required, {:enum, ~w(user assistant system)}},
+    "content" => {:required, {:oneof, [@text_content_schema, @image_content_schema, @audio_content_schema]}}
+  }
+
+  @model_preferences_schema %{
+    "intelligencePriority" => :float,
+    "speedPriority" => :float,
+    "costPriority" => :float,
+    "hints" => {:list, %{"name" => :string}}
+  }
+
+  @sampling_create_params %{
+    "messages" => {:list, @message_schema},
+    "modelPreferences" => @model_preferences_schema,
+    "systemPrompt" => :string,
+    "maxTokens" => :integer
+  }
+
+  defschema(:request_schema, %{
     "jsonrpc" => {:required, {:string, {:eq, "2.0"}}},
     "method" => {:required, {:enum, @request_methods}},
     "params" => {:dependent, &params_with_progress_token/1},
     "id" => {:required, {:either, {:string, :integer}}}
-  }
+  })
 
   defp params_with_progress_token(attrs) do
     with {:ok, %{} = schema} <- parse_request_params_by_method(attrs) do
-      schema = if get_in(attrs, ["params", "_meta"]), do: Map.merge(schema, @progress_params), else: schema
+      schema =
+        if get_in(attrs, ["params", "_meta"]),
+          do: Map.merge(schema, @progress_params),
+          else: schema
+
       {:ok, schema}
     end
   end
 
   defp parse_request_params_by_method(%{"method" => "initialize"}), do: {:ok, @init_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "ping"}), do: {:ok, @ping_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "resources/list"}), do: {:ok, @resources_list_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "resources/read"}), do: {:ok, @resources_read_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "prompts/list"}), do: {:ok, @prompts_list_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "prompts/get"}), do: {:ok, @prompts_get_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "tools/list"}), do: {:ok, @tools_list_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "tools/call"}), do: {:ok, @tools_call_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "logging/setLevel"}), do: {:ok, @set_log_level_params_schema}
+
   defp parse_request_params_by_method(%{"method" => "completion/complete"}), do: {:ok, @completion_complete_params_schema}
+
+  defp parse_request_params_by_method(%{"method" => "sampling/createMessage"}), do: {:ok, @sampling_create_params}
+
   defp parse_request_params_by_method(%{"method" => "roots/list"}), do: {:ok, :map}
   defp parse_request_params_by_method(_), do: {:ok, :map}
 
@@ -131,14 +183,14 @@ defmodule Hermes.MCP.Message do
     "logger" => :string
   }
 
-  defschema :notification_schema, %{
+  defschema(:notification_schema, %{
     "jsonrpc" => {:required, {:string, {:eq, "2.0"}}},
     "method" =>
       {:required,
        {:enum,
         ~w(notifications/initialized notifications/cancelled notifications/progress notifications/message notifications/roots/list_changed)}},
     "params" => {:dependent, &parse_notification_params_by_method/1}
-  }
+  })
 
   defp parse_notification_params_by_method(%{"method" => "notifications/initialized"}),
     do: {:ok, @init_noti_params_schema}
@@ -156,13 +208,29 @@ defmodule Hermes.MCP.Message do
 
   defp parse_notification_params_by_method(_), do: {:ok, :map}
 
-  defschema :response_schema, %{
+  defschema(:response_schema, %{
     "jsonrpc" => {:required, {:string, {:eq, "2.0"}}},
     "result" => {:required, :any},
     "id" => {:required, {:either, {:string, :integer}}}
-  }
+  })
 
-  defschema :error_schema, %{
+  defschema(:sampling_result_schema, %{
+    "role" => {:required, {:literal, "assistant"}},
+    "content" => {:required, {:oneof, [@text_content_schema, @image_content_schema, @audio_content_schema]}},
+    "model" => {:required, :string},
+    "stopReason" => {:string, {:default, "endTurn"}}
+  })
+
+  defschema(
+    :sampling_response_schema,
+    Map.put(
+      get_schema(:response_schema),
+      "result",
+      get_schema(:sampling_result_schema)
+    )
+  )
+
+  defschema(:error_schema, %{
     "jsonrpc" => {:required, {:string, {:eq, "2.0"}}},
     "error" => %{
       "code" => {:required, :integer},
@@ -170,19 +238,18 @@ defmodule Hermes.MCP.Message do
       "data" => :any
     },
     "id" => {:required, {:either, {:string, :integer}}}
-  }
+  })
 
-  defschema :mcp_message_schema,
-            {:oneof,
-             [
-               get_schema(:request_schema),
-               get_schema(:notification_schema),
-               get_schema(:response_schema),
-               get_schema(:error_schema)
-             ]}
-
-  # Batch schema for JSON-RPC batching (2025-03-26)
-  defschema :batch_schema, {:list, get_schema(:mcp_message_schema)}
+  defschema(
+    :mcp_message_schema,
+    {:oneof,
+     [
+       get_schema(:request_schema),
+       get_schema(:notification_schema),
+       get_schema(:response_schema),
+       get_schema(:error_schema)
+     ]}
+  )
 
   # generic guards
 
@@ -201,7 +268,8 @@ defmodule Hermes.MCP.Message do
       iex> is_request(notification)
       false
   """
-  defguard is_request(data) when is_map_key(data, "method") and is_map_key(data, "id")
+  defguard is_request(data)
+           when is_map_key(data, "method") and is_map_key(data, "id")
 
   @doc """
   Guard to determine if a JSON-RPC message is a notification.
@@ -218,7 +286,8 @@ defmodule Hermes.MCP.Message do
       iex> is_notification(request)
       false
   """
-  defguard is_notification(data) when is_map_key(data, "method") and not is_map_key(data, "id")
+  defguard is_notification(data)
+           when is_map_key(data, "method") and not is_map_key(data, "id")
 
   @doc """
   Guard to determine if a JSON-RPC message is a response.
@@ -231,7 +300,8 @@ defmodule Hermes.MCP.Message do
       iex> is_response(message)
       true
   """
-  defguard is_response(data) when is_map_key(data, "result") and is_map_key(data, "id")
+  defguard is_response(data)
+           when is_map_key(data, "result") and is_map_key(data, "id")
 
   @doc """
   Guard to determine if a JSON-RPC message is an error.
@@ -257,7 +327,8 @@ defmodule Hermes.MCP.Message do
       iex> is_ping(message)
       true
   """
-  defguard is_ping(data) when is_request(data) and :erlang.map_get("method", data) == "ping"
+  defguard is_ping(data)
+           when is_request(data) and :erlang.map_get("method", data) == "ping"
 
   @doc """
   Guard to check if a request is an initialize request.
@@ -268,7 +339,8 @@ defmodule Hermes.MCP.Message do
       iex> is_initialize(message)
       true
   """
-  defguard is_initialize(data) when is_request(data) and :erlang.map_get("method", data) == "initialize"
+  defguard is_initialize(data)
+           when is_request(data) and :erlang.map_get("method", data) == "initialize"
 
   @doc """
   Guard to check if a message is part of the initialization lifecycle.
@@ -291,12 +363,11 @@ defmodule Hermes.MCP.Message do
   """
   defguard is_initialize_lifecycle(data)
            when (is_request(data) and :erlang.map_get("method", data) == "initialize") or
-                  (is_notification(data) and :erlang.map_get("method", data) == "notifications/initialized")
+                  (is_notification(data) and
+                     :erlang.map_get("method", data) == "notifications/initialized")
 
   @doc """
   Decodes raw data (possibly containing multiple messages) into JSON-RPC messages.
-
-  Handles both single messages and batch messages (arrays).
 
   Returns either:
   - `{:ok, messages}` where messages is a list of parsed JSON-RPC messages
@@ -316,7 +387,6 @@ defmodule Hermes.MCP.Message do
 
   defp decode_line(line) do
     case JSON.decode(line) do
-      {:ok, messages} when is_list(messages) -> messages
       {:ok, message} when is_map(message) -> [message]
       {:ok, _} -> [:invalid]
       {:error, _} -> [:invalid]
@@ -416,7 +486,8 @@ defmodule Hermes.MCP.Message do
 
   Returns the encoded string with a newline character appended.
   """
-  @spec encode_progress_notification(map(), term() | nil) :: {:ok, String.t()} | {:error, term()}
+  @spec encode_progress_notification(map(), term() | nil) ::
+          {:ok, String.t()} | {:error, term()}
   def encode_progress_notification(params, params_schema \\ @progress_notif_params_schema) when is_map(params) do
     # Validate params against the provided schema
     case Peri.validate(params_schema, params) do
@@ -445,7 +516,11 @@ defmodule Hermes.MCP.Message do
       })
   """
   @deprecated "Use encode_progress_notification/2 with a params map. This function will be removed in a future release."
-  @spec encode_progress_notification(String.t() | integer(), number(), number() | nil) ::
+  @spec encode_progress_notification(
+          String.t() | integer(),
+          number(),
+          number() | nil
+        ) ::
           {:ok, String.t()} | {:error, term()}
   def encode_progress_notification(progress_token, progress, total)
       when (is_binary(progress_token) or is_integer(progress_token)) and is_number(progress) do
@@ -465,6 +540,10 @@ defmodule Hermes.MCP.Message do
   """
   def encode_response(response, id) do
     encode_response(response, id, get_schema(:response_schema))
+  end
+
+  def encode_sampling_response(response, id) do
+    encode_response(response, id, get_schema(:sampling_response_schema))
   end
 
   @doc """
@@ -515,7 +594,8 @@ defmodule Hermes.MCP.Message do
 
   Returns the encoded notification string with a newline character appended.
   """
-  @spec encode_log_message(String.t(), term(), String.t() | nil) :: {:ok, String.t()} | {:error, term()}
+  @spec encode_log_message(String.t(), term(), String.t() | nil) ::
+          {:ok, String.t()} | {:error, term()}
   def encode_log_message(level, data, logger \\ nil) when level in @log_levels do
     params = maybe_add_logger(%{"level" => level, "data" => data}, logger)
 
@@ -526,31 +606,8 @@ defmodule Hermes.MCP.Message do
   end
 
   defp maybe_add_logger(params, nil), do: params
+
   defp maybe_add_logger(params, logger) when is_binary(logger), do: Map.put(params, "logger", logger)
-
-  @doc """
-  Encodes a batch of JSON-RPC messages.
-
-  This function uses Peri schema validation and always returns a JSON array.
-
-  ## Parameters
-
-    * `messages` - A list of complete JSON-RPC message maps
-    * `batch_schema` - Optional Peri schema for batch validation (defaults to :batch_schema)
-
-  Returns `{:ok, encoded_batch}` if successful, or `{:error, reason}` if validation fails.
-  """
-  @spec encode_batch([map()], term() | nil) :: {:ok, String.t()} | {:error, term()}
-  def encode_batch(messages, batch_schema \\ get_schema(:batch_schema)) when is_list(messages) do
-    case Peri.validate(batch_schema, messages) do
-      {:ok, validated_messages} ->
-        batch_json = JSON.encode!(validated_messages)
-        {:ok, batch_json <> "\n"}
-
-      {:error, _} = error ->
-        error
-    end
-  end
 
   @doc """
   Returns the progress notification parameters schema for 2025-03-26 (with message field).
@@ -564,13 +621,6 @@ defmodule Hermes.MCP.Message do
 
   @doc """
   Builds a response message map without encoding to JSON.
-
-  This is useful for batch processing where we need the raw map.
-
-  ## Parameters
-
-    * `result` - The result data
-    * `id` - The response ID
     
   ## Examples
 
@@ -584,13 +634,6 @@ defmodule Hermes.MCP.Message do
 
   @doc """
   Builds an error message map without encoding to JSON.
-
-  This is useful for batch processing where we need the raw map.
-
-  ## Parameters
-
-    * `error` - The error map with code, message, and optional data
-    * `id` - The error response ID
     
   ## Examples
 
@@ -605,13 +648,6 @@ defmodule Hermes.MCP.Message do
   @doc """
   Builds a notification message map without encoding to JSON.
 
-  This is useful for batch processing where we need the raw map.
-
-  ## Parameters
-
-    * `method` - The notification method
-    * `params` - The notification parameters
-    
   ## Examples
 
       iex> Message.build_notification("notifications/message", %{"level" => "info", "data" => "test"})

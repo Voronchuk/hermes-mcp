@@ -77,6 +77,26 @@ defmodule Hermes.Server.Component.Resource do
   @type params :: map()
   @type content :: binary() | String.t()
 
+  @type t :: %__MODULE__{
+          uri: String.t(),
+          name: String.t(),
+          description: String.t() | nil,
+          mime_type: String.t(),
+          handler: module | nil,
+          title: String.t() | nil,
+          uri_template: String.t() | nil
+        }
+
+  defstruct [
+    :uri,
+    :name,
+    description: nil,
+    mime_type: "text/plain",
+    handler: nil,
+    title: nil,
+    uri_template: nil
+  ]
+
   @doc """
   Returns the URI that identifies this resource.
 
@@ -126,30 +146,25 @@ defmodule Hermes.Server.Component.Resource do
               | {:noreply, new_state :: Frame.t()}
               | {:error, error :: Error.t(), new_state :: Frame.t()}
 
-  @doc """
-  Converts a resource module into the MCP protocol format.
-  """
-  @spec to_protocol(module()) :: map()
-  def to_protocol(resource_module) do
-    %{
-      "uri" => resource_module.uri(),
-      "name" => resource_module.name(),
-      "description" => resource_module.description(),
-      "mimeType" => resource_module.mime_type()
-    }
-  end
+  defimpl JSON.Encoder, for: __MODULE__ do
+    alias Hermes.Server.Component.Resource
 
-  @doc """
-  Validates that a module implements the Resource behaviour.
-  """
-  @spec implements?(module()) :: boolean()
-  def implements?(module) do
-    behaviours =
-      :attributes
-      |> module.__info__()
-      |> Keyword.get(:behaviour, [])
-      |> List.flatten()
+    def encode(%Resource{uri_template: uri_template} = resource, _) when not is_nil(uri_template) do
+      %{
+        uriTemplate: uri_template,
+        name: resource.name
+      }
+      |> then(&if resource.title, do: Map.put(&1, :title, resource.title), else: &1)
+      |> then(&if resource.description, do: Map.put(&1, :description, resource.description), else: &1)
+      |> then(&if resource.mime_type, do: Map.put(&1, :mimeType, resource.mime_type), else: &1)
+      |> JSON.encode!()
+    end
 
-    __MODULE__ in behaviours
+    def encode(%Resource{} = resource, _) do
+      resource
+      |> Map.take([:name, :uri, :description, :title])
+      |> Map.put(:mimeType, resource.mime_type)
+      |> JSON.encode!()
+    end
   end
 end

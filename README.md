@@ -3,6 +3,7 @@
 [![hex.pm](https://img.shields.io/hexpm/v/hermes_mcp.svg)](https://hex.pm/packages/hermes_mcp)
 [![docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/hermes_mcp)
 [![ci](https://github.com/cloudwalk/hermes-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/cloudwalk/hermes-mcp/actions/workflows/ci.yml)
+[![Hex Downloads](https://img.shields.io/hexpm/dt/hermes_mcp)](https://hex.pm/packages/hermes_mcp)
 
 A high-performance Model Context Protocol (MCP) implementation in Elixir.
 
@@ -15,7 +16,7 @@ Hermes MCP is a comprehensive Elixir SDK for the [Model Context Protocol](https:
 ```elixir
 def deps do
   [
-    {:hermes_mcp, "~> 0.10.5"}  # x-release-please-version
+    {:hermes_mcp, "~> 0.14.1"}  # x-release-please-version
   ]
 end
 ```
@@ -27,38 +28,29 @@ end
 ```elixir
 # Define a server with tools capabilities
 defmodule MyApp.MCPServer do
-  use Hermes.Server, 
-    name: "My Server", 
-    version: "1.0.0", 
+  use Hermes.Server,
+    name: "My Server",
+    version: "1.0.0",
     capabilities: [:tools]
 
-  def start_link(opts) do
-    Hermes.Server.start_link(__MODULE__, :ok, opts)
-  end
-
-  component MyApp.MCPServer.EchoTool
-
   @impl true
-  def init(:ok, frame), do: {:ok, frame}
-end
-
-# Define your tool
-defmodule MyApp.MCPServer.EchoTool do
-  @moduledoc "This tool echoes everything the user says to the LLM"
-
-  use Hermes.Server.Component, type: :tool
-
-  alias Hermes.Server.Response
-
-  schema do
-    field :text, {:string, {:max, 500}},
-      description: "The text to be echoed, max of 500 chars",
-      required: true
+  # this callback will be called when the
+  # MCP initialize lifecycle completes
+  def init(_client_info, frame) do
+    {:ok,frame
+      |> assign(counter: 0)
+      |> register_tool("echo",
+        input_schema: %{
+          text: {:required, :string, max: 150, description: "the text to be echoed"}
+        },
+        annotations: %{read_only: true},
+        description: "echoes everything the user says to the LLM") }
   end
 
   @impl true
-  def execute(%{text: text}, frame) do
-    {:reply, Response.text(Response.tool(), text), frame}
+  def handle_tool("echo", %{text: text}, frame) do
+    Logger.info("This tool was called #{frame.assigns.counter + 1}")
+    {:reply, text, assign(frame, counter: frame.assigns.counter + 1)}
   end
 end
 
@@ -69,30 +61,30 @@ children = [
 ]
 
 # Add to your Plug/Phoenix router (if using HTTP)
-forward "/mcp", Hermes.Server.Transport.StreamableHTTP.Plug, server: MyApp.MCPServer
+forward "/mcp", to: Hermes.Server.Transport.StreamableHTTP.Plug, init_opts: [server: MyApp.MCPServer]
 ```
 
-### Client  
+Now you can achieve your MCP server on `http://localhost:<port>/mcp`
+
+### Client
 
 ```elixir
 # Define a client module
-defmodule MyApp.AnthropicClient do
+defmodule MyApp.MCPClient do
   use Hermes.Client,
     name: "MyApp",
     version: "1.0.0",
-    protocol_version: "2024-11-05",
-    capabilities: [:roots, :sampling]
+    protocol_version: "2025-03-26"
 end
 
 # Add to your application supervisor
 children = [
-  {MyApp.AnthropicClient, 
-   transport: {:stdio, command: "uvx", args: ["mcp-server-anthropic"]}}
+  {MyApp.MCPClient,
+   transport: {:streamable_http, base_url: "http://localhost:4000"}}
 ]
 
 # Use the client
-{:ok, tools} = MyApp.AnthropicClient.list_tools()
-{:ok, result} = MyApp.AnthropicClient.call_tool("search", %{query: "elixir"})
+{:ok, result} = MyApp.MCPClient.call_tool("echo", %{text: "this will be echoed!"})
 ```
 
 ## Why Hermes?
@@ -102,6 +94,14 @@ Named after Hermes, the Greek god of boundaries and communication, this library 
 ## Documentation
 
 For detailed guides and examples, visit the [official documentation](https://hexdocs.pm/hermes_mcp).
+
+## Examples
+
+We have build some elixir implementation examples using `plug` based and `phoenix` apps:
+
+1. [upcase-server](/priv/dev/upcase/README.md): `plug` based MCP server using streamable_http
+2. [echo-elixir](/priv/dev/echo-elixir/README.md): `phoenix` based MCP server using sse
+3. [ascii-server](/priv/dev/ascii/README.md): `phoenix_live_view` based MCP server using streamable_http and UI
 
 ## License
 

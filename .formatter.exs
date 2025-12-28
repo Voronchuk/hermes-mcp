@@ -18,7 +18,11 @@ test = [
 [
   plugins: [Styler],
   import_deps: [:peri],
-  inputs: ["{mix,.formatter}.exs", "{config,lib,test}/**/*.{ex,exs}", "priv/dev/upcase/{lib,config,test}/*.{ex,exs}"],
+  inputs: [
+    "{mix,.formatter}.exs",
+    "{config,lib,test}/**/*.{ex,exs}",
+    "priv/dev/upcase/{lib,config,test}/*.{ex,exs}"
+  ],
   locals_without_parens: locals ++ test,
   export: locals
 ]

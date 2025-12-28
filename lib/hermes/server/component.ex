@@ -1,124 +1,5 @@
 defmodule Hermes.Server.Component do
-  @moduledoc """
-  High-level API for defining MCP server components (tools, prompts, resources).
-
-  This module provides a simplified way to define server components with automatic
-  schema validation using Peri, reducing boilerplate while maintaining type safety.
-
-  ## Component Types
-
-  - **Tools**: Functions that can be invoked by clients with parameters
-  - **Prompts**: Templates that generate messages based on arguments
-  - **Resources**: Data providers identified by URIs
-
-  ## Usage
-
-  ### Tool Example
-
-      defmodule MyServer.Tools.Calculator do
-        @moduledoc "Performs arithmetic operations on two numbers"
-        
-        use Hermes.Server.Component, type: :tool
-        
-        schema %{
-          operation: {:required, {:enum, ["add", "subtract", "multiply", "divide"]}},
-          a: {:required, :float},
-          b: {:required, :float}
-        }
-        
-        @impl true
-        def execute(%{operation: "add", a: a, b: b}, frame) do
-          {:ok, a + b, frame}
-        end
-        
-        @impl true
-        def execute(%{operation: "divide", a: a, b: 0}, frame) do
-          {:error, "Cannot divide by zero"}
-        end
-      end
-
-  ### Prompt Example
-
-      defmodule MyServer.Prompts.CodeReview do
-        @moduledoc "Generate code review prompts for various programming languages"
-        
-        use Hermes.Server.Component, type: :prompt
-        
-        schema %{
-          language: {:required, :string},
-          code: {:required, :string},
-          focus_areas: {:string, {:default, "general quality"}}
-        }
-        
-        @impl true
-        def get_messages(%{language: lang, code: code, focus_areas: focus}, frame) do
-          messages = [
-            %{
-              "role" => "user",
-              "content" => %{
-                "type" => "text",
-                "text" => "Review this \#{lang} code focusing on \#{focus}..."
-              }
-            }
-          ]
-          {:ok, messages, frame}
-        end
-      end
-
-  ### Resource Example
-
-      defmodule MyServer.Resources.Config do
-        @moduledoc "Application configuration file"
-        
-        use Hermes.Server.Component, 
-          type: :resource,
-          uri: "file:///config/app.json",
-          mime_type: "application/json"
-        
-        @impl true
-        def read(_params, frame) do
-          case File.read("config/app.json") do
-            {:ok, content} -> {:ok, content, frame}
-            {:error, reason} -> {:error, "Failed to read config: \#{inspect(reason)}"}
-          end
-        end
-      end
-      
-      # Resource with query parameters
-      defmodule MyServer.Resources.UserData do
-        @moduledoc "User data with filtering support"
-        
-        use Hermes.Server.Component,
-          type: :resource,
-          uri: "users://data"
-        
-        schema %{
-          user_id: {:required, :string},
-          include_metadata: {:boolean, {:default, false}}
-        }
-        
-        @impl true
-        def read(%{user_id: id, include_metadata: meta?}, frame) do
-          data = fetch_user_data(id, meta?)
-          {:ok, Jason.encode!(data), frame}
-        end
-      end
-
-  ## Schema Validation
-
-  Components can define parameter schemas using the `schema/1` macro, which leverages
-  Peri for validation. The schema is automatically:
-  - Validated before callback execution
-  - Converted to JSON Schema for the MCP protocol
-  - Used to generate helpful error messages
-
-  ## Automatic Features
-
-  - **Description**: Extracted from `@moduledoc`
-  - **Validation**: Parameters/arguments validated before execution
-  - **Error Handling**: Detailed validation errors with paths
-  - **JSON Schema**: Automatic conversion for protocol compliance
-  """
+  @moduledoc false
 
   alias Hermes.Server.Component.Prompt
   alias Hermes.Server.Component.Resource
@@ -130,7 +11,8 @@ defmodule Hermes.Server.Component do
     {type, opts} = Keyword.pop!(opts, :type)
 
     if type not in [:tool, :prompt, :resource] do
-      raise ArgumentError, "Invalid component type: #{type}. Must be :tool, :prompt, or :resource"
+      raise ArgumentError,
+            "Invalid component type: #{type}. Must be :tool, :prompt, or :resource"
     end
 
     behaviour_module = get_behaviour_module(type)
@@ -142,7 +24,19 @@ defmodule Hermes.Server.Component do
     quote do
       @behaviour unquote(behaviour_module)
 
-      import Hermes.Server.Component, only: [schema: 1, field: 3, field: 2]
+      import Hermes.Server.Component,
+        only: [
+          schema: 1,
+          output_schema: 1,
+          field: 3,
+          field: 2,
+          embeds_many: 3,
+          embeds_many: 2,
+          embeds_one: 3,
+          embeds_one: 2
+        ]
+
+      import Hermes.Server.Frame
 
       @doc false
       def __mcp_component_type__, do: unquote(type)
@@ -190,30 +84,6 @@ defmodule Hermes.Server.Component do
 
   The schema uses Peri's validation DSL and is automatically validated
   before the component's callback is executed.
-
-  ## Examples
-
-      schema do
-        %{
-          query: {:required, :string},
-          limit: {:integer, {:default, 10}},
-          filters: %{
-            status: {:enum, ["active", "inactive", "pending"]},
-            created_after: :datetime
-          }
-        }
-      end
-
-      # With field metadata for JSON Schema (no braces needed!)
-      schema do
-        field(:email, {:required, :string}, format: "email", description: "User's email address")
-        field(:age, :integer, description: "Age in years")
-        field :address, description: "User's address" do
-          field(:street, {:required, :string})
-          field(:city, :string)
-          field(:country, :string, description: "ISO 3166-1 alpha-2 code")
-        end
-      end
   """
   defmacro schema(do: schema_def) do
     wrapped_schema =
@@ -236,7 +106,51 @@ defmodule Hermes.Server.Component do
       @doc false
       def __mcp_raw_schema__, do: unquote(wrapped_schema)
 
-      defschema :mcp_schema, Component.__clean_schema_for_peri__(unquote(wrapped_schema))
+      defschema(
+        :mcp_schema,
+        Component.__clean_schema_for_peri__(unquote(wrapped_schema))
+      )
+    end
+  end
+
+  @doc """
+  Defines the output schema for a tool component.
+
+  This schema describes the expected structure of the tool's output in the
+  structuredContent field. Only available for tool components.
+  """
+  defmacro output_schema(do: schema_def) do
+    wrapped_schema =
+      case schema_def do
+        {:%{}, _, _} = map_ast ->
+          map_ast
+
+        {:__block__, _, field_calls} ->
+          {:%{}, [], field_calls}
+
+        single_field ->
+          {:%{}, [], [single_field]}
+      end
+
+    quote do
+      import Peri
+
+      alias Hermes.Server.Component
+
+      @doc false
+      def __mcp_output_schema__, do: unquote(wrapped_schema)
+
+      defschema(
+        :mcp_output_schema,
+        Component.__clean_schema_for_peri__(unquote(wrapped_schema))
+      )
+
+      @impl true
+      def output_schema do
+        alias Hermes.Server.Component.Schema
+
+        Schema.to_json_schema(__mcp_output_schema__())
+      end
     end
   end
 
@@ -298,6 +212,75 @@ defmodule Hermes.Server.Component do
 
     quote do
       {unquote(name), {:mcp_field, unquote(nested_content), unquote(opts)}}
+    end
+  end
+
+  @doc """
+  Defines a field that embeds many objects (array of objects).
+
+  ## Examples
+
+      embeds_many :users, description: "List of users" do
+        field :id, :string, required: true, description: "User ID"
+        field :name, :string, description: "User name"
+      end
+
+      embeds_many :tags, required: true do
+        field :name, :string, required: true
+        field :value, :string
+      end
+  """
+  defmacro embeds_many(name, opts \\ [], do: block) do
+    {required, remaining_opts} = Keyword.pop(opts, :required, false)
+
+    nested_content =
+      case block do
+        {:__block__, _, expressions} ->
+          {:%{}, [], expressions}
+
+        single_expr ->
+          {:%{}, [], [single_expr]}
+      end
+
+    type = if required, do: {:required, {:list, nested_content}}, else: {:list, nested_content}
+
+    quote do
+      {unquote(name), {:mcp_field, unquote(type), unquote(remaining_opts)}}
+    end
+  end
+
+  @doc """
+  Defines a field that embeds one object.
+
+  ## Examples
+
+      embeds_one :user, description: "User object" do
+        field :id, :string, required: true, description: "User ID"
+        field :name, :string, description: "User name"
+      end
+
+      embeds_one :address, required: true do
+        field :street, :string, required: true
+        field :city, :string, required: true
+        field :zip, :string
+      end
+  """
+  defmacro embeds_one(name, opts \\ [], do: block) do
+    {required, remaining_opts} = Keyword.pop(opts, :required, false)
+
+    nested_content =
+      case block do
+        {:__block__, _, expressions} ->
+          {:%{}, [], expressions}
+
+        single_expr ->
+          {:%{}, [], [single_expr]}
+      end
+
+    type = if required, do: {:required, nested_content}, else: nested_content
+
+    quote do
+      {unquote(name), {:mcp_field, unquote(type), unquote(remaining_opts)}}
     end
   end
 
@@ -394,6 +377,11 @@ defmodule Hermes.Server.Component do
 
   def __clean_schema_for_peri__(schema), do: __inject_transforms__(schema)
 
+  defp __inject_transforms__({type, {:default, default}}) when type in ~w(date datetime naive_datetime time)a do
+    base = __inject_transforms__(type)
+    {base, {:default, default}}
+  end
+
   defp __inject_transforms__(:date) do
     {:custom, &__validate_date__/1}
   end
@@ -418,6 +406,10 @@ defmodule Hermes.Server.Component do
     {:list, __inject_transforms__(type)}
   end
 
+  defp __inject_transforms__(nested) when is_map(nested) do
+    __clean_schema_for_peri__(nested)
+  end
+
   defp __inject_transforms__(type), do: type
 
   defp __validate_date__(value) when is_binary(value) do
@@ -428,6 +420,7 @@ defmodule Hermes.Server.Component do
   end
 
   defp __validate_date__(%Date{} = date), do: {:ok, date}
+
   defp __validate_date__(_), do: {:error, "expected ISO 8601 date string or Date struct", []}
 
   defp __validate_time__(value) when is_binary(value) do
@@ -438,6 +431,7 @@ defmodule Hermes.Server.Component do
   end
 
   defp __validate_time__(%Time{} = time), do: {:ok, time}
+
   defp __validate_time__(_), do: {:error, "expected ISO 8601 time string or Time struct", []}
 
   defp __validate_datetime__(value) when is_binary(value) do
@@ -448,6 +442,7 @@ defmodule Hermes.Server.Component do
   end
 
   defp __validate_datetime__(%DateTime{} = datetime), do: {:ok, datetime}
+
   defp __validate_datetime__(_), do: {:error, "expected ISO 8601 datetime string or DateTime struct", []}
 
   defp __validate_naive_datetime__(value) when is_binary(value) do
@@ -463,5 +458,6 @@ defmodule Hermes.Server.Component do
   end
 
   defp __validate_naive_datetime__(%NaiveDateTime{} = naive_datetime), do: {:ok, naive_datetime}
+
   defp __validate_naive_datetime__(_), do: {:error, "expected ISO 8601 naive datetime string or NaiveDateTime struct", []}
 end

@@ -13,10 +13,10 @@ if Code.ensure_loaded?(:gun) do
     @behaviour Hermes.Transport.Behaviour
 
     use GenServer
+    use Hermes.Logging
 
     import Peri
 
-    alias Hermes.Logging
     alias Hermes.Telemetry
     alias Hermes.Transport.Behaviour, as: Transport
 
@@ -81,7 +81,7 @@ if Code.ensure_loaded?(:gun) do
     end
 
     @impl Transport
-    def send_message(pid, message) when is_binary(message) do
+    def send_message(pid, message, _opts \\ []) when is_binary(message) do
       GenServer.call(pid, {:send, message})
     end
 
@@ -91,9 +91,7 @@ if Code.ensure_loaded?(:gun) do
     end
 
     @impl Transport
-    def supported_protocol_versions do
-      ["2024-11-05", "2025-03-26"]
-    end
+    def supported_protocol_versions, do: :all
 
     @impl GenServer
     def init(%{} = opts) do
@@ -182,6 +180,7 @@ if Code.ensure_loaded?(:gun) do
 
         {:error, reason} ->
           Logging.transport_event("gun_await_up_failed", %{reason: reason}, level: :error)
+
           {:stop, {:gun_await_up_failed, reason}, state}
       end
     end
@@ -220,6 +219,7 @@ if Code.ensure_loaded?(:gun) do
     rescue
       e ->
         Logging.transport_event("ws_send_failed", %{error: Exception.message(e)}, level: :error)
+
         {:reply, {:error, :send_failed}, state}
     end
 
@@ -282,13 +282,21 @@ if Code.ensure_loaded?(:gun) do
           {:gun_upgrade, pid, stream_ref, ["websocket"], _headers},
           %{gun_pid: pid, stream_ref: stream_ref, client: client} = state
         ) do
-      Logging.transport_event("ws_upgrade_success", "WebSocket connection established")
+      Logging.transport_event(
+        "ws_upgrade_success",
+        "WebSocket connection established"
+      )
+
       GenServer.cast(client, :initialize)
       {:noreply, state}
     end
 
     def handle_info({:gun_response, pid, stream_ref, _, status, headers}, %{gun_pid: pid, stream_ref: stream_ref} = state) do
-      Logging.transport_event("ws_upgrade_rejected", %{status: status, headers: headers}, level: :error)
+      Logging.transport_event(
+        "ws_upgrade_rejected",
+        %{status: status, headers: headers},
+        level: :error
+      )
 
       {:stop, {:ws_upgrade_rejected, status}, state}
     end

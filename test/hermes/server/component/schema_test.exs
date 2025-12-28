@@ -64,29 +64,110 @@ defmodule Hermes.Server.Component.SchemaTest do
 
       result = Schema.to_json_schema(schema)
 
-      assert result["properties"]["pattern"] == %{"type" => "string", "pattern" => "^[A-Z]+$"}
+      assert result["properties"]["pattern"] == %{
+               "type" => "string",
+               "pattern" => "^[A-Z]+$"
+             }
+
       assert result["properties"]["short"] == %{"type" => "string", "minLength" => 5}
-      assert result["properties"]["long"] == %{"type" => "string", "maxLength" => 100}
+
+      assert result["properties"]["long"] == %{
+               "type" => "string",
+               "maxLength" => 100
+             }
     end
 
     test "converts numeric constraints" do
       schema = %{
-        min_int: {:integer, {:min, 0}},
-        max_int: {:integer, {:max, 100}},
+        eq_int: {:integer, {:eq, 42}},
+        neq_int: {:integer, {:neq, 0}},
+        gt_int: {:integer, {:gt, 0}},
+        gte_int: {:integer, {:gte, 18}},
+        lt_int: {:integer, {:lt, 100}},
+        lte_int: {:integer, {:lte, 99}},
         range_int: {:integer, {:range, {1, 10}}},
-        min_float: {:float, {:min, 0.0}},
-        max_float: {:float, {:max, 100.0}},
+        eq_float: {:float, {:eq, 3.14}},
+        neq_float: {:float, {:neq, 0.0}},
+        gt_float: {:float, {:gt, 0.0}},
+        gte_float: {:float, {:gte, 1.5}},
+        lt_float: {:float, {:lt, 100.0}},
+        lte_float: {:float, {:lte, 99.9}},
         range_float: {:float, {:range, {1.0, 10.0}}}
       }
 
       result = Schema.to_json_schema(schema)
 
-      assert result["properties"]["min_int"] == %{"type" => "integer", "minimum" => 0}
-      assert result["properties"]["max_int"] == %{"type" => "integer", "maximum" => 100}
-      assert result["properties"]["range_int"] == %{"type" => "integer", "minimum" => 1, "maximum" => 10}
-      assert result["properties"]["min_float"] == %{"type" => "number", "minimum" => 0.0}
-      assert result["properties"]["max_float"] == %{"type" => "number", "maximum" => 100.0}
-      assert result["properties"]["range_float"] == %{"type" => "number", "minimum" => 1.0, "maximum" => 10.0}
+      assert result["properties"]["eq_int"] == %{
+               "type" => "integer",
+               "const" => 42
+             }
+
+      assert result["properties"]["neq_int"] == %{
+               "type" => "integer",
+               "not" => %{"const" => 0}
+             }
+
+      assert result["properties"]["gt_int"] == %{
+               "type" => "integer",
+               "exclusiveMinimum" => 0
+             }
+
+      assert result["properties"]["gte_int"] == %{
+               "type" => "integer",
+               "minimum" => 18
+             }
+
+      assert result["properties"]["lt_int"] == %{
+               "type" => "integer",
+               "exclusiveMaximum" => 100
+             }
+
+      assert result["properties"]["lte_int"] == %{
+               "type" => "integer",
+               "maximum" => 99
+             }
+
+      assert result["properties"]["range_int"] == %{
+               "type" => "integer",
+               "minimum" => 1,
+               "maximum" => 10
+             }
+
+      assert result["properties"]["eq_float"] == %{
+               "type" => "number",
+               "const" => 3.14
+             }
+
+      assert result["properties"]["neq_float"] == %{
+               "type" => "number",
+               "not" => %{"const" => 0.0}
+             }
+
+      assert result["properties"]["gt_float"] == %{
+               "type" => "number",
+               "exclusiveMinimum" => 0.0
+             }
+
+      assert result["properties"]["gte_float"] == %{
+               "type" => "number",
+               "minimum" => 1.5
+             }
+
+      assert result["properties"]["lt_float"] == %{
+               "type" => "number",
+               "exclusiveMaximum" => 100.0
+             }
+
+      assert result["properties"]["lte_float"] == %{
+               "type" => "number",
+               "maximum" => 99.9
+             }
+
+      assert result["properties"]["range_float"] == %{
+               "type" => "number",
+               "minimum" => 1.0,
+               "maximum" => 10.0
+             }
     end
 
     test "converts enum types" do
@@ -97,7 +178,10 @@ defmodule Hermes.Server.Component.SchemaTest do
 
       result = Schema.to_json_schema(schema)
 
-      assert result["properties"]["status"] == %{"enum" => ["active", "inactive", "pending"]}
+      assert result["properties"]["status"] == %{
+               "enum" => ["active", "inactive", "pending"]
+             }
+
       assert result["properties"]["role"] == %{"enum" => [:admin, :user, :guest]}
       assert result["required"] == ["role"]
     end
@@ -206,7 +290,6 @@ defmodule Hermes.Server.Component.SchemaTest do
 
       result = Schema.to_json_schema(schema)
 
-      # Defaults are handled by Peri, not JSON Schema
       assert result["properties"]["limit"] == %{"type" => "integer"}
       assert result["properties"]["sort"] == %{"type" => "string"}
     end
@@ -264,7 +347,10 @@ defmodule Hermes.Server.Component.SchemaTest do
       assert descriptions["count"] == "Optional integer parameter"
       assert descriptions["rate"] == "Optional number parameter"
       assert descriptions["enabled"] == "Optional boolean parameter"
-      assert descriptions["tags"] == "Optional array of string parameter elements parameter"
+
+      assert descriptions["tags"] ==
+               "Optional array of string parameter elements parameter"
+
       assert descriptions["data"] == "Optional object parameter"
       assert descriptions["status"] == ~s(Optional one of: ["on", "off"])
       assert descriptions["config"] == "Optional nested object"
@@ -286,7 +372,8 @@ defmodule Hermes.Server.Component.SchemaTest do
 
       result = Schema.format_errors(errors)
 
-      assert result == "user.email: is required; age: must be a positive integer; invalid schema"
+      assert result ==
+               "user.email: is required; age: must be a positive integer; invalid schema"
     end
 
     test "handles mixed error formats" do
@@ -298,7 +385,8 @@ defmodule Hermes.Server.Component.SchemaTest do
 
       result = Schema.format_errors(errors)
 
-      assert result == "Simple error; field: complex error; {:unexpected, \"format\"}"
+      assert result ==
+               "Simple error; field: complex error; {:unexpected, \"format\"}"
     end
   end
 
@@ -470,6 +558,222 @@ defmodule Hermes.Server.Component.SchemaTest do
                  }
                }
              }
+    end
+  end
+
+  describe "normalize/1" do
+    test "handles simple atom types" do
+      schema = %{
+        name: :string,
+        age: :integer,
+        active: :boolean
+      }
+
+      assert Schema.normalize(schema) == schema
+    end
+
+    test "handles required fields with simple syntax" do
+      schema = %{
+        name: {:required, :string},
+        email: {:required, :string}
+      }
+
+      assert Schema.normalize(schema) == schema
+    end
+
+    test "handles fields with constraints and metadata" do
+      schema = %{
+        text: {:string, max: 150, description: "Sample text"},
+        count: {:integer, min: 1, max: 100, description: "Count value"}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               text: {:mcp_field, {:string, {:max, 150}}, [description: "Sample text"]},
+               count: {:mcp_field, {:integer, {:range, {1, 100}}}, [description: "Count value"]}
+             }
+    end
+
+    test "handles required fields with constraints and metadata" do
+      schema = %{
+        name: {:required, :string, max: 50, description: "User name"}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               name: {:mcp_field, {:required, :string}, [max: 50, description: "User name"]}
+             }
+    end
+
+    test "handles nested objects" do
+      schema = %{
+        user:
+          {:object,
+           %{
+             name: {:required, :string},
+             age: :integer
+           }}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               user: %{
+                 name: {:required, :string},
+                 age: :integer
+               }
+             }
+    end
+
+    test "handles nested objects with metadata" do
+      schema = %{
+        profile:
+          {:object,
+           %{
+             name: :string,
+             bio: {:string, max: 500}
+           }, description: "User profile"}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               profile:
+                 {:mcp_field,
+                  %{
+                    name: :string,
+                    bio: {:mcp_field, {:string, {:max, 500}}, []}
+                  }, [description: "User profile"]}
+             }
+    end
+
+    test "handles list types" do
+      schema = %{
+        tags: {:list, :string},
+        scores: {:list, :integer}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               tags: {:list, :string},
+               scores: {:list, :integer}
+             }
+    end
+
+    test "handles list types with metadata" do
+      schema = %{
+        tags: {:list, :string, description: "Tag list"}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               tags: {:mcp_field, {:list, :string}, [description: "Tag list"]}
+             }
+    end
+
+    test "handles field macro output format" do
+      schema = [
+        {:text, {:mcp_field, {:required, :string}, [max: 150, description: "Text field"]}}
+      ]
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               text: {:mcp_field, {:required, :string}, [max: 150, description: "Text field"]}
+             }
+    end
+
+    test "handles already normalized mcp_field" do
+      schema = %{
+        field: {:mcp_field, :string, [description: "Already normalized"]}
+      }
+
+      assert Schema.normalize(schema) == schema
+    end
+
+    test "handles constraints with defaults" do
+      schema = %{
+        limit: {:integer, min: 1, max: 100, default: 10, description: "Page limit"}
+      }
+
+      normalized = Schema.normalize(schema)
+
+      assert normalized == %{
+               limit: {:mcp_field, {:integer, {:range, {1, 100}}}, [default: 10, description: "Page limit"]}
+             }
+    end
+  end
+
+  describe "integration with runtime format" do
+    test "complete workflow from runtime format to JSON Schema" do
+      runtime_schema = %{
+        query: {:required, :string, description: "Search query"},
+        limit: {:integer, min: 1, max: 100, default: 10},
+        filters:
+          {:object,
+           %{
+             status: {:required, {:enum, ["active", "inactive"]}, type: "string", description: "possible statuses"},
+             created_after: :datetime
+           }, description: "Search filters"}
+      }
+
+      normalized = Schema.normalize(runtime_schema)
+
+      json_schema = Schema.to_json_schema(normalized)
+
+      assert json_schema == %{
+               "type" => "object",
+               "properties" => %{
+                 "query" => %{
+                   "type" => "string",
+                   "description" => "Search query"
+                 },
+                 "limit" => %{
+                   "type" => "integer",
+                   "minimum" => 1,
+                   "maximum" => 100
+                 },
+                 "filters" => %{
+                   "type" => "object",
+                   "required" => ["status"],
+                   "properties" => %{
+                     "status" => %{
+                       "enum" => ["active", "inactive"],
+                       "type" => "string",
+                       "description" => "possible statuses"
+                     },
+                     "created_after" => %{
+                       "type" => "string",
+                       "format" => "date-time"
+                     }
+                   },
+                   "description" => "Search filters"
+                 }
+               },
+               "required" => ["query"]
+             }
+    end
+
+    test "runtime format preserves validation behavior" do
+      runtime_schema = %{
+        email: {:required, :string, format: "email", description: "Email address"},
+        age: {:integer, min: 0, max: 150}
+      }
+
+      normalized = Schema.normalize(runtime_schema)
+      validator = Schema.validator(normalized)
+
+      assert {:ok, _} = validator.(%{email: "test@example.com", age: 25})
+
+      assert {:error, errors} = validator.(%{age: 25})
+      assert length(errors) > 0
+
+      assert {:error, errors} = validator.(%{email: "test@example.com", age: 200})
+      assert length(errors) > 0
     end
   end
 end

@@ -98,8 +98,8 @@ defmodule Hermes.MCP.Setup do
 
     Process.sleep(80)
 
-    assert_client_initialized client
-    assert_server_initialized server
+    assert_client_initialized(client)
+    assert_server_initialized(server)
 
     :ok = StubTransport.clear(transport)
 
@@ -114,21 +114,40 @@ defmodule Hermes.MCP.Setup do
 
     start_supervised!(Hermes.Server.Registry)
     transport = start_supervised!(StubTransport)
-    start_supervised!({StubServer, transport: StubTransport})
-    assert server = Hermes.Server.Registry.whereis_server(StubServer)
+
+    # Start session supervisor
+    start_supervised!({Hermes.Server.Session.Supervisor, server: StubServer, registry: Hermes.Server.Registry})
+
+    server_opts = [
+      module: StubServer,
+      name: Hermes.Server.Registry.server(StubServer),
+      registry: Hermes.Server.Registry,
+      transport: [layer: StubTransport, name: transport]
+    ]
+
+    server = start_supervised!({Base, server_opts})
+    assert server == Hermes.Server.Registry.whereis_server(StubServer)
 
     request = Builders.init_request(protocol_version, info, capabilities)
     assert {:ok, _} = GenServer.call(server, {:request, request, session_id, %{}})
     notification = Builders.build_notification("notifications/initialized", %{})
-    assert :ok = GenServer.cast(server, {:notification, notification, session_id, %{}})
+
+    assert :ok =
+             GenServer.cast(server, {:notification, notification, session_id, %{}})
 
     Process.sleep(50)
 
-    assert_server_initialized server
+    assert_server_initialized(server)
 
     :ok = StubTransport.clear(transport)
 
-    Map.merge(ctx, %{transport: transport, server: server, session_id: session_id})
+    Map.merge(ctx, %{
+      transport: transport,
+      server: server,
+      session_id: session_id,
+      server_registry: Hermes.Server.Registry,
+      server_module: StubServer
+    })
   end
 
   def initialized_base_server(ctx) do
@@ -141,7 +160,9 @@ defmodule Hermes.MCP.Setup do
 
     # session supervisor
     %{registry: registry} = ctx = with_default_registry(ctx)
+
     start_supervised!({Session.Supervisor, server: server_module, registry: ctx.registry})
+
     assert registry.supervisor(server_module, :session_supervisor)
 
     # base server
@@ -151,7 +172,6 @@ defmodule Hermes.MCP.Setup do
     server_opts = [
       module: server_module,
       name: server_name,
-      init_arg: :ok,
       registry: registry,
       transport: [
         layer: transport,
@@ -164,6 +184,7 @@ defmodule Hermes.MCP.Setup do
 
     # transport
     start_supervised!({transport, name: transport_name, server: server_name, registry: registry})
+
     assert registry.whereis_transport(server_module, transport)
 
     request = Builders.init_request(protocol_version, info, capabilities)
@@ -173,7 +194,7 @@ defmodule Hermes.MCP.Setup do
 
     Process.sleep(50)
 
-    assert_server_initialized server
+    assert_server_initialized(server)
 
     :ok = StubTransport.clear(transport)
 
@@ -187,11 +208,12 @@ defmodule Hermes.MCP.Setup do
 
     transport_name = Hermes.Server.Registry.transport(server_module, :stdio)
     start_supervised!({Transport.STDIO, name: transport_name, server: server_module})
-    assert transport = Hermes.Server.Registry.whereis_transport(server_module, :stdio)
+
+    assert transport =
+             Hermes.Server.Registry.whereis_transport(server_module, :stdio)
 
     opts = [
       module: server_module,
-      init_arg: :ok,
       name: name,
       transport: [layer: Transport.STDIO, name: transport_name]
     ]
@@ -221,8 +243,10 @@ defmodule Hermes.MCP.Setup do
           "prompts" => %{}
         }
 
-    client_info = context[:client_info] || %{"name" => "TestClient", "version" => "1.0.0"}
-    client_capabilities = context[:client_capabilities]
+    client_info =
+      context[:client_info] || %{"name" => "TestClient", "version" => "1.0.0"}
+
+    client_capabilities = context[:client_capabilities] || %{}
 
     client =
       start_supervised!(

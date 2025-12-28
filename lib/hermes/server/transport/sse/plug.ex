@@ -3,6 +3,19 @@ if Code.ensure_loaded?(Plug) do
     @moduledoc """
     A Plug implementation for the SSE (Server-Sent Events) transport.
 
+    > #### Deprecated {: .warning}
+    >
+    > This Plug has been deprecated as of MCP specification 2025-03-26 in favor
+    > of the Streamable HTTP transport (`Hermes.Server.Transport.StreamableHTTP.Plug`).
+    >
+    > The HTTP+SSE transport from protocol version 2024-11-05 has been replaced by
+    > the more flexible Streamable HTTP transport which supports optional SSE streaming
+    > on a single endpoint.
+    >
+    > For new implementations, please use `Hermes.Server.Transport.StreamableHTTP.Plug` instead.
+    > This module is maintained for backward compatibility with clients using the
+    > 2024-11-05 protocol version.
+
     This plug handles the MCP HTTP+SSE protocol as specified in MCP 2024-11-05.
     It provides two separate endpoints:
 
@@ -52,7 +65,7 @@ if Code.ensure_loaded?(Plug) do
     - `:server` - The server process name (required)
     - `:mode` - Either `:sse` or `:post` to determine endpoint behavior (required)
     - `:timeout` - Request timeout in milliseconds (default: 30000)
-    - `:registry` - The registry to use. See `Hermes.Server.Registry.Adapter` for more information (default: `Hermes.Server.Registry`)
+    - `:registry` - The registry to use. See `Hermes.Server.Registry.Adapter` for more information (default: Elixir's Registry implementation)
 
     ## Security Features
 
@@ -71,9 +84,10 @@ if Code.ensure_loaded?(Plug) do
 
     @behaviour Plug
 
+    use Hermes.Logging
+
     import Plug.Conn
 
-    alias Hermes.Logging
     alias Hermes.MCP.Error
     alias Hermes.MCP.ID
     alias Hermes.MCP.Message
@@ -82,6 +96,8 @@ if Code.ensure_loaded?(Plug) do
     alias Plug.Conn.Unfetched
 
     require Message
+
+    @deprecated "Use Hermes.Server.Transport.StreamableHTTP.Plug instead"
 
     @default_timeout 30_000
 
@@ -148,6 +164,7 @@ if Code.ensure_loaded?(Plug) do
 
           {:error, reason} ->
             Logging.transport_event("sse_registration_failed", %{reason: reason}, level: :error)
+
             send_error(conn, 500, "Could not establish SSE connection")
         end
       else
@@ -182,26 +199,33 @@ if Code.ensure_loaded?(Plug) do
 
     defp handle_post_message(conn, %{transport: transport} = opts) do
       with {:ok, body, conn} <- maybe_read_request_body(conn, opts),
-           {:ok, messages} <- maybe_parse_messages(body) do
+           {:ok, [message]} <- maybe_parse_messages(body) do
         session_id = extract_session_id(conn)
         context = build_request_context(conn)
 
-        messages
-        |> prepare_message_or_batch()
-        |> then(fn msg -> SSE.handle_message(transport, session_id, msg, context) end)
+        message
+        |> then(fn msg ->
+          SSE.handle_message(transport, session_id, msg, context)
+        end)
         |> send_response(conn)
       else
         {:error, :invalid_json} ->
-          send_jsonrpc_error(conn, Error.protocol(:parse_error, %{message: "Invalid JSON"}), nil)
+          send_jsonrpc_error(
+            conn,
+            Error.protocol(:parse_error, %{message: "Invalid JSON"}),
+            nil
+          )
 
         {:error, reason} ->
           Logging.transport_event("post_error", %{reason: reason}, level: :error)
-          send_jsonrpc_error(conn, Error.protocol(:internal_error, %{reason: reason}), nil)
+
+          send_jsonrpc_error(
+            conn,
+            Error.protocol(:internal_error, %{reason: reason}),
+            nil
+          )
       end
     end
-
-    defp prepare_message_or_batch([single]), do: single
-    defp prepare_message_or_batch(batch), do: batch
 
     defp send_response({:ok, nil}, conn) do
       conn
@@ -221,7 +245,12 @@ if Code.ensure_loaded?(Plug) do
 
     defp send_response({:error, reason}, conn) do
       Logging.transport_event("response_error", %{reason: reason}, level: :error)
-      send_jsonrpc_error(conn, Error.protocol(:internal_error, %{reason: reason}), nil)
+
+      send_jsonrpc_error(
+        conn,
+        Error.protocol(:internal_error, %{reason: reason}),
+        nil
+      )
     end
 
     # Helper functions
@@ -264,24 +293,11 @@ if Code.ensure_loaded?(Plug) do
       end
     end
 
-    defp maybe_parse_messages(body) when is_list(body) do
-      Enum.reduce_while(body, {:ok, []}, fn msg, {:ok, messages} ->
-        case maybe_parse_messages(msg) do
-          {:ok, parsed} -> {:cont, {:ok, messages ++ parsed}}
-          err -> {:halt, err}
-        end
-      end)
-    end
-
     defp maybe_read_request_body(%{body_params: %Unfetched{aspect: :body_params}} = conn, %{timeout: timeout}) do
       case Plug.Conn.read_body(conn, read_timeout: timeout) do
         {:ok, body, conn} -> {:ok, body, conn}
         {:error, reason} -> {:error, reason}
       end
-    end
-
-    defp maybe_read_request_body(%{body_params: %{"_json" => json_array}} = conn, _) when is_list(json_array) do
-      {:ok, json_array, conn}
     end
 
     defp maybe_read_request_body(%{body_params: body} = conn, _), do: {:ok, body, conn}

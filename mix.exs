@@ -1,7 +1,7 @@
 defmodule Hermes.MixProject do
   use Mix.Project
 
-  @version "0.10.5"
+  @version "0.14.1"
   @source_url "https://github.com/cloudwalk/hermes-mcp"
 
   def project do
@@ -37,6 +37,12 @@ defmodule Hermes.MixProject do
     ]
   end
 
+  def cli do
+    [
+      preferred_envs: [dialyzer: :test]
+    ]
+  end
+
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
@@ -51,7 +57,7 @@ defmodule Hermes.MixProject do
       {:bypass, "~> 2.1", only: :test},
       {:cowboy, "~> 2.10", only: :test},
       {:styler, "~> 1.4", only: [:dev, :test], runtime: false},
-      {:ex_doc, ">= 0.0.0", only: [:dev], runtime: false},
+      {:ex_doc, ">= 0.0.0", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.3", only: [:dev, :test], runtime: false}
     ]
@@ -96,28 +102,22 @@ defmodule Hermes.MixProject do
   defp aliases do
     [
       setup: ["deps.get", "compile --force"],
-      lint: ["format --check-formatted", "credo --strict", "dialyzer"]
+      lint: ["format --check-formatted", "credo --strict", "dialyzer"],
+      format_doc: ["cmd npx prettier -w ./**/*.md"]
     ]
   end
 
   defp docs do
     [
-      main: "readme",
+      main: "home",
       before_closing_head_tag: &before_closing_head_tag/1,
       extras: [
         "README.md",
-        "pages/installation.md",
-        "pages/transport.md",
-        "pages/client_usage.md",
-        "pages/server_quickstart.md",
-        "pages/server_components.md",
-        "pages/server_transport.md",
-        "pages/server_architecture.md",
-        "pages/message_handling.md",
-        "pages/progress_tracking.md",
-        "pages/logging.md",
-        "pages/error_handling.md",
-        "pages/cli_usage.md",
+        "pages/home.md",
+        "pages/building-a-client.md",
+        "pages/building-a-server.md",
+        "pages/recipes.md",
+        "pages/reference.md",
         "CHANGELOG.md",
         "CONTRIBUTING.md",
         "LICENSE"
@@ -125,26 +125,20 @@ defmodule Hermes.MixProject do
       groups_for_extras: [
         "Getting Started": [
           "README.md",
-          "pages/installation.md"
+          "pages/home.md"
         ],
-        "Client Development": [
-          "pages/client_usage.md",
-          "pages/transport.md"
+        "Building with Hermes": [
+          "pages/building-a-client.md",
+          "pages/building-a-server.md"
         ],
-        "Server Development": [
-          "pages/server_quickstart.md",
-          "pages/server_components.md",
-          "pages/server_transport.md",
-          "pages/server_architecture.md"
+        "Patterns & Reference": [
+          "pages/recipes.md",
+          "pages/reference.md"
         ],
-        "Core Concepts": [
-          "pages/message_handling.md",
-          "pages/error_handling.md",
-          "pages/progress_tracking.md",
-          "pages/logging.md"
-        ],
-        "Additional Tools": [
-          "pages/cli_usage.md"
+        "Project Info": [
+          "CHANGELOG.md",
+          "CONTRIBUTING.md",
+          "LICENSE"
         ]
       ]
     ]

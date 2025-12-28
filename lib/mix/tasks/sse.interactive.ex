@@ -4,11 +4,27 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
   @moduledoc """
   Mix task to test the SSE transport implementation, interactively sending commands.
 
+  > #### Deprecated {: .warning}
+  >
+  > This task uses the deprecated SSE transport. As of MCP specification 2025-03-26,
+  > the HTTP+SSE transport has been replaced by the Streamable HTTP transport.
+  >
+  > For testing new servers, please use `mix hermes.streamable_http.interactive` instead.
+  > This task is maintained for backward compatibility with servers using the
+  > 2024-11-05 protocol version.
+
   ## Options
 
   * `--base-url` - Base URL for the SSE server (default: http://localhost:8000)
   * `--base-path` - Base path to append to the base URL
   * `--sse-path` - Specific SSE endpoint path
+  * `--header` - Add a header to requests (can be specified multiple times)
+
+  ## Examples
+
+      mix hermes.sse.interactive --base-url http://localhost:8000
+      mix hermes.sse.interactive --header "Authorization: Bearer token123"
+      mix hermes.sse.interactive --header "X-API-Key: secret" --header "X-Custom: value"
   """
 
   use Mix.Task
@@ -21,6 +37,7 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
     base_url: :string,
     base_path: :string,
     sse_path: :string,
+    header: :keep,
     verbose: :count
   ]
 
@@ -42,9 +59,11 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
     base_url = parsed[:base_url] || "http://localhost:8000"
     base_path = parsed[:base_path] || "/"
     sse_path = parsed[:sse_path] || "/sse"
+    headers = parse_headers(Keyword.get_values(parsed, :header))
 
     if base_url == "" do
       IO.puts("#{UI.colors().error}Error: --base-url cannot be empty#{UI.colors().reset}")
+
       IO.puts("Please provide a valid URL, e.g., --base-url=http://localhost:8000")
       System.halt(1)
     end
@@ -53,6 +72,7 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
 
     header = UI.header("HERMES MCP SSE INTERACTIVE")
     IO.puts(header)
+
     IO.puts("#{UI.colors().info}Connecting to SSE server at: #{server_url}#{UI.colors().reset}\n")
 
     SupervisedShell.start(
@@ -64,7 +84,8 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
           base_url: base_url,
           base_path: base_path,
           sse_path: sse_path
-        ]
+        ],
+        headers: headers
       ],
       client_opts: [
         name: :sse_test,
@@ -96,5 +117,26 @@ defmodule Mix.Tasks.Hermes.Sse.Interactive do
     metadata = Logger.metadata()
     Logger.configure(level: log_level)
     Logger.metadata(metadata)
+  end
+
+  defp parse_headers(header_list) when is_list(header_list) do
+    header_list
+    |> Enum.map(&parse_header/1)
+    |> Enum.reject(&is_nil/1)
+    |> Map.new()
+  end
+
+  defp parse_header(header_string) do
+    case String.split(header_string, ":", parts: 2) do
+      [key, value] ->
+        {String.trim(key), String.trim(value)}
+
+      _ ->
+        IO.puts(
+          "#{UI.colors().warning}Warning: Invalid header format '#{header_string}'. Expected 'Header-Name: value'#{UI.colors().reset}"
+        )
+
+        nil
+    end
   end
 end

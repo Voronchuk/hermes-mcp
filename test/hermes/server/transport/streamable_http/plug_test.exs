@@ -31,7 +31,11 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
     end
 
     test "accepts custom session header", %{registry: registry} do
-      opts = StreamableHTTPPlug.init(server: StubServer, session_header: "x-custom-session")
+      opts =
+        StreamableHTTPPlug.init(
+          server: StubServer,
+          session_header: "x-custom-session"
+        )
 
       assert %{
                transport: transport,
@@ -46,7 +50,12 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
       start_supervised!(MockCustomRegistry)
       assert Process.whereis(MockCustomRegistry)
 
-      opts = StreamableHTTPPlug.init(server: StubServer, mode: :streamable_http, registry: MockCustomRegistry)
+      opts =
+        StreamableHTTPPlug.init(
+          server: StubServer,
+          mode: :streamable_http,
+          registry: MockCustomRegistry
+        )
 
       expected_transport = MockCustomRegistry.transport(StubServer, :streamable_http)
 
@@ -57,7 +66,11 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
   describe "GET endpoint" do
     setup %{registry: registry} do
       name = registry.transport(StubServer, :streamable_http)
-      {:ok, transport} = start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry})
+      sup = registry.task_supervisor(StubServer)
+
+      {:ok, transport} =
+        start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry, task_supervisor: sup})
+
       opts = StreamableHTTPPlug.init(server: StubServer)
 
       %{opts: opts, transport: transport}
@@ -107,7 +120,8 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
         })
 
       # Start a stub transport for the server
-      stub_transport = start_supervised!({StubTransport, name: registry.transport(StubServer, :stub)})
+      stub_transport =
+        start_supervised!({StubTransport, name: registry.transport(StubServer, :stub)})
 
       # Start the Base server with stub transport
       {:ok, _server} =
@@ -115,14 +129,17 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
           Hermes.Server.Base,
           module: StubServer,
           name: registry.server(StubServer),
-          init_arg: :ok,
           transport: [layer: StubTransport, name: stub_transport],
           registry: registry
         })
 
       # Now start the StreamableHTTP transport
       name = registry.transport(StubServer, :streamable_http)
-      {:ok, transport} = start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry})
+      sup = registry.task_supervisor(StubServer)
+      start_supervised!({Task.Supervisor, name: sup})
+
+      {:ok, transport} =
+        start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry, task_supervisor: sup})
 
       opts = StreamableHTTPPlug.init(server: StubServer)
 
@@ -130,7 +147,12 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
     end
 
     test "POST request with notification returns 202", %{opts: opts} do
-      notification = build_notification("notifications/message", %{"level" => "info", "data" => "test"})
+      notification =
+        build_notification("notifications/message", %{
+          "level" => "info",
+          "data" => "test"
+        })
+
       {:ok, body} = Message.encode_notification(notification)
 
       conn =
@@ -160,66 +182,6 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
       assert response["result"] == %{}
     end
 
-    test "POST request with batch returns batch response", %{opts: opts} do
-      # First initialize a session to establish protocol version
-      init_request =
-        build_request("initialize", %{
-          "protocolVersion" => "2025-03-26",
-          "clientInfo" => %{"name" => "test", "version" => "1.0.0"}
-        })
-
-      {:ok, init_body} = Message.encode_request(init_request, "init-1")
-
-      # Send initialization request - it will generate its own session ID
-      init_conn =
-        :post
-        |> conn("/", init_body)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> StreamableHTTPPlug.call(opts)
-
-      assert init_conn.status == 200
-
-      # Extract the session ID from the response header
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # Send initialized notification with the actual session ID
-      init_notification = build_notification("notifications/initialized", %{})
-      {:ok, notification_body} = Message.encode_notification(init_notification)
-
-      notification_conn =
-        :post
-        |> conn("/", notification_body)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> put_req_header("mcp-session-id", session_id)
-        |> StreamableHTTPPlug.call(opts)
-
-      assert notification_conn.status == 202
-
-      # Now send the batch request with the established session
-      batch = [
-        build_request("ping", %{}, "1"),
-        build_request("ping", %{}, "2")
-      ]
-
-      {:ok, body} = Message.encode_batch(batch)
-
-      conn =
-        :post
-        |> conn("/", body)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> put_req_header("mcp-session-id", session_id)
-        |> StreamableHTTPPlug.call(opts)
-
-      assert conn.status == 200
-      {:ok, responses} = Jason.decode(conn.resp_body)
-      assert is_list(responses)
-      assert length(responses) == 2
-      assert Enum.all?(responses, &(&1["result"] == %{}))
-    end
-
     test "POST request with invalid JSON returns error", %{opts: opts} do
       conn =
         :post
@@ -232,71 +194,16 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
       {:ok, body} = Jason.decode(conn.resp_body)
       assert body["error"]["code"] == -32_700
     end
-
-    test "handles Phoenix JSON array parsing", %{opts: opts} do
-      # First initialize a session to establish protocol version
-      init_request =
-        build_request("initialize", %{
-          "protocolVersion" => "2025-03-26",
-          "clientInfo" => %{"name" => "test", "version" => "1.0.0"}
-        })
-
-      {:ok, init_body} = Message.encode_request(init_request, "init-2")
-
-      # Send initialization request - it will generate its own session ID
-      init_conn =
-        :post
-        |> conn("/", init_body)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> StreamableHTTPPlug.call(opts)
-
-      assert init_conn.status == 200
-
-      # Extract the session ID from the response header
-      [session_id] = get_resp_header(init_conn, "mcp-session-id")
-
-      # Send initialized notification with the actual session ID
-      init_notification = build_notification("notifications/initialized", %{})
-      {:ok, notification_body} = Message.encode_notification(init_notification)
-
-      notification_conn =
-        :post
-        |> conn("/", notification_body)
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> put_req_header("mcp-session-id", session_id)
-        |> StreamableHTTPPlug.call(opts)
-
-      assert notification_conn.status == 202
-
-      # Now test Phoenix array parsing with established session
-      batch = [
-        build_request("ping", %{}, "1"),
-        build_request("ping", %{}, "2")
-      ]
-
-      # Simulate Phoenix's behavior of parsing JSON arrays into _json
-      conn =
-        :post
-        |> conn("/", "")
-        |> Map.put(:body_params, %{"_json" => batch})
-        |> put_req_header("content-type", "application/json")
-        |> put_req_header("accept", "application/json, text/event-stream")
-        |> put_req_header("mcp-session-id", session_id)
-        |> StreamableHTTPPlug.call(opts)
-
-      assert conn.status == 200
-      {:ok, responses} = Jason.decode(conn.resp_body)
-      assert is_list(responses)
-      assert length(responses) == 2
-    end
   end
 
   describe "DELETE endpoint" do
     setup %{registry: registry} do
       name = registry.transport(StubServer, :streamable_http)
-      {:ok, transport} = start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry})
+      sup = registry.task_supervisor(StubServer)
+
+      {:ok, transport} =
+        start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry, task_supervisor: sup})
+
       opts = StreamableHTTPPlug.init(server: StubServer)
 
       %{opts: opts, transport: transport}
@@ -328,7 +235,11 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
   describe "unsupported methods" do
     setup %{registry: registry} do
       name = registry.transport(StubServer, :streamable_http)
-      {:ok, _transport} = start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry})
+      sup = registry.task_supervisor(StubServer)
+
+      {:ok, _transport} =
+        start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry, task_supervisor: sup})
+
       opts = StreamableHTTPPlug.init(server: StubServer)
 
       %{opts: opts}
@@ -356,7 +267,8 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
         })
 
       # Start a stub transport for the server
-      stub_transport = start_supervised!({StubTransport, name: registry.transport(StubServer, :stub)})
+      stub_transport =
+        start_supervised!({StubTransport, name: registry.transport(StubServer, :stub)})
 
       # Start the Base server with stub transport
       {:ok, _server} =
@@ -364,21 +276,30 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
           Hermes.Server.Base,
           module: StubServer,
           name: registry.server(StubServer),
-          init_arg: :ok,
           transport: [layer: StubTransport, name: stub_transport],
           registry: registry
         })
 
       # Now start the StreamableHTTP transport
       name = registry.transport(StubServer, :streamable_http)
-      {:ok, transport} = start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry})
+      sup = registry.task_supervisor(StubServer)
+      start_supervised!({Task.Supervisor, name: sup})
+
+      {:ok, transport} =
+        start_supervised({StreamableHTTP, server: StubServer, name: name, registry: registry, task_supervisor: sup})
+
       opts = StreamableHTTPPlug.init(server: StubServer)
 
       %{opts: opts, transport: transport}
     end
 
     test "extracts session ID from header", %{opts: opts} do
-      notification = build_notification("notifications/message", %{"level" => "info", "data" => "test"})
+      notification =
+        build_notification("notifications/message", %{
+          "level" => "info",
+          "data" => "test"
+        })
+
       {:ok, body} = Message.encode_notification(notification)
 
       conn =
@@ -393,7 +314,12 @@ defmodule Hermes.Server.Transport.StreamableHTTP.PlugTest do
     end
 
     test "generates session ID if not provided", %{opts: opts} do
-      notification = build_notification("notifications/message", %{"level" => "info", "data" => "test"})
+      notification =
+        build_notification("notifications/message", %{
+          "level" => "info",
+          "data" => "test"
+        })
+
       {:ok, body} = Message.encode_notification(notification)
 
       conn =

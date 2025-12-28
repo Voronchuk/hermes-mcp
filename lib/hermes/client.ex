@@ -91,7 +91,8 @@ defmodule Hermes.Client do
   @doc """
   Guard to check if a capability is supported by checking map keys.
   """
-  defguard is_supported_capability(capabilities, capability) when is_map_key(capabilities, capability)
+  defguard is_supported_capability(capabilities, capability)
+           when is_map_key(capabilities, capability)
 
   @doc """
   Generates an MCP client module with all necessary functions.
@@ -353,19 +354,11 @@ defmodule Hermes.Client do
           :ok = MyClient.close()
       """
       def close, do: Base.close(__MODULE__)
-
-      @doc """
-      Sends a batch of requests for the server. Check `Hermes.Client.Operation` to learn more.
-
-      ## Examples
-          operations = [%Operation{method: "ping", params: %{}}]
-          MyClient.send_batch(operations)
-      """
-      def send_batch(operations), do: Base.send_batch(__MODULE__, operations)
     end
   end
 
-  @spec parse_capability(capability() | {capability(), capability_opts()}, map()) :: map()
+  @spec parse_capability(capability() | {capability(), capability_opts()}, map()) ::
+          map()
   defp parse_capability(capability, %{} = capabilities) when is_client_capability(capability) do
     Map.put(capabilities, to_string(capability), %{})
   end
@@ -375,6 +368,11 @@ defmodule Hermes.Client do
 
     capabilities
     |> Map.put(to_string(capability), %{})
-    |> then(&if(is_nil(list_changed?), do: &1, else: Map.put(&1, "listChanged", list_changed?)))
+    |> then(
+      &if(is_nil(list_changed?),
+        do: &1,
+        else: Map.put(&1, "listChanged", list_changed?)
+      )
+    )
   end
 end

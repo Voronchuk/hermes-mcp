@@ -1,9 +1,9 @@
 defmodule Hermes.SSE do
   @moduledoc false
 
-  alias Hermes.SSE.Parser
+  use Hermes.Logging
 
-  require Logger
+  alias Hermes.SSE.Parser
 
   @connection_headers %{
     "accept" => "text/event-stream",
@@ -47,7 +47,11 @@ defmodule Hermes.SSE do
       ref = make_ref()
       task = spawn_stream_task(req, ref, opts)
 
-      Stream.resource(fn -> {ref, task} end, &process_task_stream/1, &shutdown_task/1)
+      Stream.resource(
+        fn -> {ref, task} end,
+        &process_task_stream/1,
+        &shutdown_task/1
+      )
     end
   end
 
@@ -72,7 +76,7 @@ defmodule Hermes.SSE do
       on_chunk = &process_sse_stream(&1, &2, dest, ref)
 
       case Finch.stream_while(req, Hermes.Finch, nil, on_chunk, http) do
-        {:ok, _} ->
+        {:ok, _acc} ->
           Hermes.Logging.transport_event("sse_reconnect", %{
             reason: "success",
             attempt: attempt,
@@ -82,12 +86,12 @@ defmodule Hermes.SSE do
           Process.sleep(backoff)
           loop_sse_stream(req, ref, dest, opts, attempt + 1)
 
-        {:error, err} ->
+        {:error, exc, _acc} ->
           Hermes.Logging.transport_event(
             "sse_reconnect",
             %{
               reason: "error",
-              error: err,
+              error: Exception.message(exc),
               attempt: attempt,
               max_attempts: retry[:max_reconnections]
             },

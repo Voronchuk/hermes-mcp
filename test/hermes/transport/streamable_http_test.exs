@@ -53,7 +53,8 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      _state = :sys.get_state(transport)
+      state = :sys.get_state(transport)
+      assert state.mcp_url.path == "/"
 
       StreamableHTTP.shutdown(transport)
       StubClient.clear_messages()
@@ -84,7 +85,9 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      {:ok, ping_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, ping_message)
 
       Process.sleep(100)
@@ -150,7 +153,9 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      {:ok, ping_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, ping_message)
 
       Process.sleep(200)
@@ -244,7 +249,9 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      {:ok, ping_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, ping_message)
 
       Process.sleep(100)
@@ -274,7 +281,9 @@ defmodule Hermes.Transport.StreamableHTTPTest do
             Plug.Conn.resp(conn, 200, ~s|{"jsonrpc":"2.0","id":"1","result":{}}|)
 
           [^session_id] ->
-            conn = Plug.Conn.put_resp_header(conn, "content-type", "application/json")
+            conn =
+              Plug.Conn.put_resp_header(conn, "content-type", "application/json")
+
             Plug.Conn.resp(conn, 200, ~s|{"jsonrpc":"2.0","id":"2","result":{}}|)
         end
       end)
@@ -294,12 +303,16 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      {:ok, first_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, first_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, first_message)
 
       Process.sleep(100)
 
-      {:ok, second_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "2")
+      {:ok, second_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "2")
+
       assert :ok = StreamableHTTP.send_message(transport, second_message)
 
       Process.sleep(100)
@@ -315,8 +328,11 @@ defmodule Hermes.Transport.StreamableHTTPTest do
       {:ok, stub_client} = StubClient.start_link()
 
       Bypass.expect(bypass, "POST", "/mcp", fn conn ->
-        assert "auth-token" == conn |> Plug.Conn.get_req_header("authorization") |> List.first()
-        assert "application/json, text/event-stream" == conn |> Plug.Conn.get_req_header("accept") |> List.first()
+        assert "auth-token" ==
+                 conn |> Plug.Conn.get_req_header("authorization") |> List.first()
+
+        assert "application/json, text/event-stream" ==
+                 conn |> Plug.Conn.get_req_header("accept") |> List.first()
 
         conn = Plug.Conn.put_resp_header(conn, "content-type", "application/json")
         Plug.Conn.resp(conn, 200, ~s|{"jsonrpc":"2.0","id":"1","result":{}}|)
@@ -335,7 +351,9 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      {:ok, ping_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, ping_message)
 
       Process.sleep(100)
@@ -367,8 +385,63 @@ defmodule Hermes.Transport.StreamableHTTPTest do
       state = :sys.get_state(transport)
       assert state.mcp_url.path == custom_path
 
-      {:ok, ping_message} = Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
       assert :ok = StreamableHTTP.send_message(transport, ping_message)
+
+      Process.sleep(100)
+
+      StreamableHTTP.shutdown(transport)
+      StubClient.clear_messages()
+    end
+
+    test "sends per-request headers via opts parameter", %{bypass: bypass} do
+      server_url = "http://localhost:#{bypass.port}"
+      {:ok, stub_client} = StubClient.start_link()
+
+      Bypass.expect(bypass, "POST", "/mcp", fn conn ->
+        # Verify transport-level header is present
+        assert "Bearer base-token" ==
+                 conn |> Plug.Conn.get_req_header("authorization") |> List.first()
+
+        # Verify per-request header is present
+        assert "request-123" ==
+                 conn |> Plug.Conn.get_req_header("x-request-id") |> List.first()
+
+        # Verify per-request header overrides transport-level header
+        assert "request-specific" ==
+                 conn |> Plug.Conn.get_req_header("x-client-version") |> List.first()
+
+        conn = Plug.Conn.put_resp_header(conn, "content-type", "application/json")
+        Plug.Conn.resp(conn, 200, ~s|{"jsonrpc":"2.0","id":"1","result":{}}|)
+      end)
+
+      {:ok, transport} =
+        StreamableHTTP.start_link(
+          client: stub_client,
+          base_url: server_url,
+          mcp_path: "/mcp",
+          headers: %{
+            "authorization" => "Bearer base-token",
+            "x-client-version" => "1.0.0"
+          },
+          transport_opts: @test_http_opts
+        )
+
+      Process.sleep(100)
+
+      {:ok, ping_message} =
+        Message.encode_request(%{"method" => "ping", "params" => %{}}, "1")
+
+      # Test new opts-based header functionality
+      per_request_headers = %{
+        "x-request-id" => "request-123",
+        # This should override transport header
+        "x-client-version" => "request-specific"
+      }
+
+      assert :ok = StreamableHTTP.send_message(transport, ping_message, headers: per_request_headers)
 
       Process.sleep(100)
 
@@ -394,7 +467,8 @@ defmodule Hermes.Transport.StreamableHTTPTest do
 
       Process.sleep(100)
 
-      assert {:error, _reason} = StreamableHTTP.send_message(transport, "test message")
+      assert {:error, _reason} =
+               StreamableHTTP.send_message(transport, "test message")
 
       StreamableHTTP.shutdown(transport)
       StubClient.clear_messages()

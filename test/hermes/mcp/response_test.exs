@@ -5,7 +5,7 @@ defmodule Hermes.MCP.ResponseTest do
 
   @moduletag capture_log: true
 
-  doctest Hermes.MCP.Response
+  doctest Response
 
   describe "from_json_rpc/1" do
     test "creates a response from a JSON-RPC response" do
@@ -67,7 +67,11 @@ defmodule Hermes.MCP.ResponseTest do
       }
 
       assert Response.unwrap(success_response) == %{"data" => "value"}
-      assert Response.unwrap(error_response) == %{"isError" => true, "reason" => "not_found"}
+
+      assert Response.unwrap(error_response) == %{
+               "isError" => true,
+               "reason" => "not_found"
+             }
     end
   end
 
@@ -130,7 +134,11 @@ defmodule Hermes.MCP.ResponseTest do
       }
 
       assert Response.get_result(success_response) == %{"data" => "value"}
-      assert Response.get_result(error_response) == %{"isError" => true, "reason" => "not_found"}
+
+      assert Response.get_result(error_response) == %{
+               "isError" => true,
+               "reason" => "not_found"
+             }
     end
   end
 

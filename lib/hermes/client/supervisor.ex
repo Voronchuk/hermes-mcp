@@ -1,30 +1,5 @@
 defmodule Hermes.Client.Supervisor do
-  @moduledoc """
-  Supervisor for MCP client processes.
-
-  This module manages the lifecycle of both the MCP client and its associated
-  transport process. It uses a `:one_for_all` strategy, meaning if either the
-  client or transport crashes, both are restarted together to maintain consistency.
-
-  The supervisor automatically:
-  - Starts the appropriate transport based on configuration
-  - Starts the client with a reference to the transport
-  - Ensures proper initialization order (transport first, then client)
-  - Handles process naming for both client and transport
-
-  ## Process Naming
-
-  - Client process: Uses the module name or custom `:name` option
-  - Transport process: Named as `Module.concat(ClientName, "Transport")`
-
-  ## Transport Configuration
-
-  Supports all Hermes transport types:
-  - `:stdio` - For command-line MCP servers
-  - `:sse` - For Server-Sent Events transports
-  - `:websocket` - For WebSocket connections
-  - `:streamable_http` - For streaming HTTP transports
-  """
+  @moduledoc false
 
   use Supervisor
 
@@ -135,6 +110,17 @@ defmodule Hermes.Client.Supervisor do
 
   defp parse_transport_config({:stdio, opts}), do: {STDIO, opts}
   defp parse_transport_config({:streamable_http, opts}), do: {StreamableHTTP, opts}
-  defp parse_transport_config({:sse, opts}), do: {SSE, opts}
+
+  defp parse_transport_config({:sse, opts}) do
+    IO.warn(
+      "The :sse transport option is deprecated as of MCP specification 2025-03-26. " <>
+        "Please use {:streamable_http, opts} instead. " <>
+        "The SSE transport is maintained only for backward compatibility with MCP protocol version 2024-11-05.",
+      []
+    )
+
+    {SSE, opts}
+  end
+
   defp parse_transport_config({:websocket, opts}), do: {Websocket, opts}
 end

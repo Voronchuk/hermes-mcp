@@ -1,21 +1,5 @@
 defmodule Hermes.Server.Registry do
-  @moduledoc """
-  Registry for MCP server and transport processes.
-
-  This module provides a safe way to manage process names without creating
-  atoms dynamically at runtime. It uses a via tuple pattern with Registry.
-
-  ## Usage
-
-      # Register a server process
-      {:ok, _pid} = GenServer.start_link(MyServer, arg, name: Registry.server(MyModule))
-      
-      # Register a transport process
-      {:ok, _pid} = GenServer.start_link(Transport, arg, name: Registry.transport(MyModule, :stdio))
-      
-      # Look up a process
-      GenServer.call(Registry.server(MyModule), :ping)
-  """
+  @moduledoc false
 
   def child_spec(_) do
     Registry.child_spec(keys: :unique, name: __MODULE__)
@@ -29,10 +13,16 @@ defmodule Hermes.Server.Registry do
     {:via, Registry, {__MODULE__, {:server, module}}}
   end
 
+  @spec task_supervisor(server_module :: module()) :: GenServer.name()
+  def task_supervisor(module) when is_atom(module) do
+    {:via, Registry, {__MODULE__, {:task_supervisor, module}}}
+  end
+
   @doc """
   Returns a via tuple for naming a server session process.
   """
-  @spec server_session(server_module :: module(), session_id :: String.t()) :: GenServer.name()
+  @spec server_session(server_module :: module(), session_id :: String.t()) ::
+          GenServer.name()
   def server_session(server, session_id) do
     {:via, Registry, {__MODULE__, {:session, server, session_id}}}
   end
@@ -40,7 +30,8 @@ defmodule Hermes.Server.Registry do
   @doc """
   Returns a via tuple for naming a transport process.
   """
-  @spec transport(server_module :: module(), transport_type :: atom()) :: GenServer.name()
+  @spec transport(server_module :: module(), transport_type :: atom()) ::
+          GenServer.name()
   def transport(module, type) when is_atom(module) do
     {:via, Registry, {__MODULE__, {:transport, module, type}}}
   end
@@ -56,7 +47,8 @@ defmodule Hermes.Server.Registry do
   @doc """
   Gets the PID of a session-specific server.
   """
-  @spec whereis_server_session(server_module :: module(), session_id :: String.t()) :: pid | nil
+  @spec whereis_server_session(server_module :: module(), session_id :: String.t()) ::
+          pid | nil
   def whereis_server_session(module, session_id) do
     case Registry.lookup(__MODULE__, {:session, module, session_id}) do
       [{pid, _}] -> pid

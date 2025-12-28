@@ -56,7 +56,6 @@ defmodule Hermes.Server.Component.Tool do
   """
 
   alias Hermes.MCP.Error
-  alias Hermes.Server.Component
   alias Hermes.Server.Frame
   alias Hermes.Server.Response
 
@@ -65,6 +64,30 @@ defmodule Hermes.Server.Component.Tool do
   @type schema :: map()
   @type annotations :: map() | nil
 
+  @type t :: %__MODULE__{
+          name: String.t(),
+          title: String.t() | nil,
+          description: String.t() | nil,
+          input_schema: map | nil,
+          output_schema: map | nil,
+          annotations: map | nil,
+          handler: module | nil,
+          validate_input: (map -> {:ok, map} | {:error, [Peri.Error.t()]}) | nil,
+          validate_output: (map -> {:ok, map} | {:error, [Peri.Error.t()]}) | nil
+        }
+
+  defstruct [
+    :name,
+    title: nil,
+    description: nil,
+    input_schema: nil,
+    output_schema: nil,
+    annotations: nil,
+    handler: nil,
+    validate_input: nil,
+    validate_output: nil
+  ]
+
   @doc """
   Returns the JSON Schema for the tool's input parameters.
 
@@ -72,6 +95,15 @@ defmodule Hermes.Server.Component.Tool do
   The schema should follow the JSON Schema specification.
   """
   @callback input_schema() :: schema()
+
+  @doc """
+  Returns the JSON Schema for the tool's output structure.
+
+  This schema defines the expected structure of the tool's output in the
+  structuredContent field. The schema should follow the JSON Schema specification.
+  This is an optional callback.
+  """
+  @callback output_schema() :: schema()
 
   @doc """
   Returns optional annotations for the tool.
@@ -90,7 +122,6 @@ defmodule Hermes.Server.Component.Tool do
       end
   """
   @callback annotations() :: annotations()
-  @optional_callbacks annotations: 0
 
   @doc """
   Executes the tool with the given parameters.
@@ -128,51 +159,21 @@ defmodule Hermes.Server.Component.Tool do
               | {:noreply, new_state :: Frame.t()}
               | {:error, error :: Error.t(), new_state :: Frame.t()}
 
-  @doc """
-  Converts a tool module into the MCP protocol format.
+  @optional_callbacks annotations: 0, output_schema: 0
 
-  ## Parameters
-    * `tool_module` - The tool module
-    * `name` - The tool name (optional, defaults to deriving from module name)
-    * `protocol_version` - The protocol version (optional, defaults to "2024-11-05")
-  """
-  @spec to_protocol(module(), String.t() | nil, String.t()) :: map()
-  def to_protocol(tool_module, name \\ nil, protocol_version \\ "2024-11-05") do
-    name = name || derive_tool_name(tool_module)
+  defimpl JSON.Encoder, for: __MODULE__ do
+    alias Hermes.Server.Component.Tool
 
-    base = %{
-      "name" => name,
-      "description" => Component.get_description(tool_module),
-      "inputSchema" => tool_module.input_schema()
-    }
-
-    # Only include annotations if protocol version supports it
-    if Hermes.Protocol.supports_feature?(protocol_version, :tool_annotations) and
-         Code.ensure_loaded?(tool_module) and function_exported?(tool_module, :annotations, 0) do
-      Map.put(base, "annotations", tool_module.annotations())
-    else
-      base
+    def encode(%Tool{} = tool, _) do
+      %{
+        "name" => tool.name,
+        "description" => tool.description,
+        "inputSchema" => tool.input_schema
+      }
+      |> then(&if t = tool.title, do: Map.put(&1, "title", t), else: &1)
+      |> then(&if os = tool.output_schema, do: Map.put(&1, "outputSchema", os), else: &1)
+      |> then(&if a = tool.annotations, do: Map.put(&1, "annotations", a), else: &1)
+      |> JSON.encode!()
     end
-  end
-
-  defp derive_tool_name(module) do
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-  end
-
-  @doc """
-  Validates that a module implements the Tool behaviour.
-  """
-  @spec implements?(module()) :: boolean()
-  def implements?(module) do
-    behaviours =
-      :attributes
-      |> module.__info__()
-      |> Keyword.get(:behaviour, [])
-      |> List.flatten()
-
-    __MODULE__ in behaviours
   end
 end

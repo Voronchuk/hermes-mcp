@@ -41,10 +41,12 @@ defmodule Mix.Interactive.SupervisedShell do
     case start_processes(state) do
       {:ok, state} ->
         IO.puts("\nType #{UI.colors().command}help#{UI.colors().reset} for available commands\n")
+
         supervised_loop(state)
 
       {:error, reason} ->
         IO.puts("#{UI.colors().error}Failed to start processes: #{inspect(reason)}#{UI.colors().reset}")
+
         {:error, reason}
     end
   end
@@ -62,7 +64,8 @@ defmodule Mix.Interactive.SupervisedShell do
         end)
 
       receive do
-        {:EXIT, pid, reason} when pid == state.client_pid or pid == state.transport_pid ->
+        {:EXIT, pid, reason}
+        when pid == state.client_pid or pid == state.transport_pid ->
           Process.exit(input_pid, :kill)
           handle_process_exit(pid, reason, state)
 
@@ -86,10 +89,12 @@ defmodule Mix.Interactive.SupervisedShell do
     cond do
       pid == state.client_pid ->
         IO.puts("\n#{UI.colors().error}✗ Client process crashed: #{format_exit_reason(reason)}#{UI.colors().reset}")
+
         handle_restart(state)
 
       pid == state.transport_pid ->
         IO.puts("\n#{UI.colors().error}✗ Transport process crashed: #{format_exit_reason(reason)}#{UI.colors().reset}")
+
         handle_restart(state)
 
       true ->
@@ -118,15 +123,18 @@ defmodule Mix.Interactive.SupervisedShell do
       case start_processes(new_state) do
         {:ok, restarted_state} ->
           IO.puts("#{UI.colors().success}✓ Successfully restarted#{UI.colors().reset}")
+
           IO.write("\n#{UI.colors().prompt}mcp> #{UI.colors().reset}")
           supervised_loop(restarted_state)
 
         {:error, reason} ->
           IO.puts("#{UI.colors().error}✗ Restart failed: #{inspect(reason)}#{UI.colors().reset}")
+
           offer_manual_restart(new_state)
       end
     else
       IO.puts("#{UI.colors().error}✗ Maximum restart attempts reached#{UI.colors().reset}")
+
       offer_manual_restart(state)
     end
   end
@@ -146,10 +154,12 @@ defmodule Mix.Interactive.SupervisedShell do
         case start_processes(new_state) do
           {:ok, restarted_state} ->
             IO.puts("#{UI.colors().success}✓ Successfully reconnected#{UI.colors().reset}")
+
             supervised_loop(restarted_state)
 
           {:error, reason} ->
             IO.puts("#{UI.colors().error}✗ Retry failed: #{inspect(reason)}#{UI.colors().reset}")
+
             offer_manual_restart(new_state)
         end
 

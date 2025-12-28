@@ -11,14 +11,12 @@ defmodule Hermes.Transport.STDIO do
   @behaviour Hermes.Transport.Behaviour
 
   use GenServer
+  use Hermes.Logging
 
   import Peri
 
-  alias Hermes.Logging
   alias Hermes.Telemetry
   alias Hermes.Transport.Behaviour, as: Transport
-
-  require Logger
 
   @type t :: GenServer.server()
 
@@ -75,7 +73,7 @@ defmodule Hermes.Transport.STDIO do
   end
 
   @impl Transport
-  def send_message(pid \\ __MODULE__, message) when is_binary(message) do
+  def send_message(pid \\ __MODULE__, message, _opts \\ []) when is_binary(message) do
     GenServer.call(pid, {:send, message})
   end
 
@@ -85,9 +83,7 @@ defmodule Hermes.Transport.STDIO do
   end
 
   @impl Transport
-  def supported_protocol_versions do
-    ["2024-11-05", "2025-03-26"]
-  end
+  def supported_protocol_versions, do: :all
 
   @impl GenServer
   def init(%{} = opts) do
@@ -172,7 +168,11 @@ defmodule Hermes.Transport.STDIO do
   end
 
   def handle_info({port, :closed}, %{port: port} = state) do
-    Logging.transport_event("stdio_closed", "Connection closed, transport will restart", level: :warning)
+    Logging.transport_event(
+      "stdio_closed",
+      "Connection closed, transport will restart",
+      level: :warning
+    )
 
     Telemetry.execute(
       Telemetry.event_transport_disconnect(),
@@ -265,7 +265,10 @@ defmodule Hermes.Transport.STDIO do
 
   defp spawn_port(cmd, state) do
     default_env = get_default_env()
-    env = if is_nil(state.env), do: default_env, else: Map.merge(default_env, state.env)
+
+    env =
+      if is_nil(state.env), do: default_env, else: Map.merge(default_env, state.env)
+
     env = normalize_env_for_erlang(env)
 
     opts =
@@ -278,7 +281,8 @@ defmodule Hermes.Transport.STDIO do
   end
 
   defp get_default_env do
-    default_env = if :os.type() == {:win32, :nt}, do: @win32_default_env, else: @unix_default_env
+    default_env =
+      if :os.type() == {:win32, :nt}, do: @win32_default_env, else: @unix_default_env
 
     System.get_env()
     |> Enum.filter(fn {k, _} -> Enum.member?(default_env, k) end)

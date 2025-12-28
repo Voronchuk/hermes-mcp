@@ -9,11 +9,10 @@ defmodule Hermes.Server.Transport.STDIO do
   @behaviour Hermes.Transport.Behaviour
 
   use GenServer
+  use Hermes.Logging
 
   import Peri
 
-  alias Hermes.Logging
-  alias Hermes.MCP.Error
   alias Hermes.MCP.Message
   alias Hermes.Telemetry
   alias Hermes.Transport.Behaviour, as: Transport
@@ -36,7 +35,8 @@ defmodule Hermes.Server.Transport.STDIO do
   defschema(:parse_options, [
     {:server, {:required, {:oneof, [{:custom, &Hermes.genserver_name/1}, :pid, {:tuple, [:atom, :any]}]}}},
     {:name, {:custom, &Hermes.genserver_name/1}},
-    {:registry, {:atom, {:default, Hermes.Server.Registry}}}
+    {:registry, {:atom, {:default, Hermes.Server.Registry}}},
+    {:request_timeout, {:integer, {:default, to_timeout(second: 30)}}}
   ])
 
   @doc """
@@ -77,8 +77,8 @@ defmodule Hermes.Server.Transport.STDIO do
     * `{:error, reason}` otherwise
   """
   @impl Transport
-  @spec send_message(GenServer.server(), binary()) :: :ok | {:error, term()}
-  def send_message(transport, message) when is_binary(message) do
+  @spec send_message(GenServer.server(), binary(), keyword()) :: :ok | {:error, term()}
+  def send_message(transport, message, _opts \\ []) when is_binary(message) do
     GenServer.cast(transport, {:send, message})
   end
 
@@ -95,16 +95,19 @@ defmodule Hermes.Server.Transport.STDIO do
   end
 
   @impl Transport
-  def supported_protocol_versions do
-    ["2024-11-05", "2025-03-26"]
-  end
+  def supported_protocol_versions, do: :all
 
   @impl GenServer
   def init(opts) do
     :ok = :io.setopts(encoding: :utf8)
     Process.flag(:trap_exit, true)
 
-    state = %{server: opts.server, reading_task: nil, registry: opts.registry}
+    state = %{
+      server: opts.server,
+      reading_task: nil,
+      registry: opts.registry,
+      request_timeout: opts.request_timeout
+    }
 
     Logger.metadata(mcp_transport: :stdio, mcp_server: state.server)
     Logging.transport_event("starting", %{transport: :stdio, server: state.server})
@@ -237,46 +240,16 @@ defmodule Hermes.Server.Transport.STDIO do
 
     case Message.decode(data) do
       {:ok, messages} ->
-        process_messages(messages, state)
+        process_message(messages, state)
 
       {:error, reason} ->
         Logging.transport_event("parse_error", %{reason: reason}, level: :error)
     end
   end
 
-  defp process_messages([message], state) do
-    process_message(message, state)
-  end
-
-  defp process_messages([_ | _] = messages, %{server: server_name, registry: registry}) do
+  defp process_message(message, %{server: server_name, registry: registry} = state) do
     server = registry.whereis_server(server_name)
-
-    context = %{
-      type: :stdio,
-      env: System.get_env(),
-      pid: System.pid()
-    }
-
-    case GenServer.call(server, {:batch_request, messages, "stdio", context}) do
-      {:batch, responses} ->
-        case Message.encode_batch(responses) do
-          {:ok, batch_response} -> send_message(self(), batch_response)
-          {:error, reason} -> Logging.transport_event("batch_encode_error", %{reason: reason}, level: :error)
-        end
-
-      {:error, error} ->
-        case Error.to_json_rpc(error) do
-          {:ok, error_response} -> send_message(self(), error_response)
-          _ -> Logging.transport_event("batch_error", %{error: error}, level: :error)
-        end
-    end
-  catch
-    :exit, reason ->
-      Logging.transport_event("server_batch_call_failed", %{reason: reason}, level: :error)
-  end
-
-  defp process_message(message, %{server: server_name, registry: registry}) do
-    server = registry.whereis_server(server_name)
+    timeout = state.request_timeout
 
     context = %{
       type: :stdio,
@@ -287,9 +260,12 @@ defmodule Hermes.Server.Transport.STDIO do
     if Message.is_notification(message) do
       GenServer.cast(server, {:notification, message, "stdio", context})
     else
-      case GenServer.call(server, {:request, message, "stdio", context}) do
-        {:ok, response} when is_binary(response) -> send_message(self(), response)
-        {:error, reason} -> Logging.transport_event("server_error", %{reason: reason}, level: :error)
+      case GenServer.call(server, {:request, message, "stdio", context}, timeout) do
+        {:ok, response} when is_binary(response) ->
+          send_message(self(), response, [])
+
+        {:error, reason} ->
+          Logging.transport_event("server_error", %{reason: reason}, level: :error)
       end
     end
   catch

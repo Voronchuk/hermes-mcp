@@ -27,10 +27,12 @@ defmodule Mix.Interactive.State do
   defp get_transport_info(client_state) do
     transport_info = client_state.transport
 
-    layer = if is_map(transport_info), do: transport_info[:layer], else: transport_info
+    layer =
+      if is_map(transport_info), do: transport_info[:layer], else: transport_info
 
     transport_pid =
-      if is_map(transport_info) and Map.has_key?(transport_info, :name) and is_pid(transport_info.name) do
+      if is_map(transport_info) and Map.has_key?(transport_info, :name) and
+           is_pid(transport_info.name) do
         transport_info.name
       else
         Process.whereis(layer)
@@ -95,12 +97,14 @@ defmodule Mix.Interactive.State do
       IO.puts("  #{UI.colors().info}Pending Requests:#{UI.colors().reset} None")
     else
       IO.puts("  #{UI.colors().info}Pending Requests (#{request_count}):#{UI.colors().reset}")
+
       Enum.each(pending_requests, &print_request(&1, verbose))
     end
   end
 
   defp print_request({id, request}, verbose) do
     elapsed_ms = Request.elapsed_time(request)
+
     IO.puts("    #{UI.colors().command}#{id}#{UI.colors().reset} - Method: #{request.method}, Elapsed: #{elapsed_ms}ms")
 
     if verbose do
@@ -148,10 +152,21 @@ defmodule Mix.Interactive.State do
       transport_state = :sys.get_state(transport_pid)
 
       case transport_layer do
-        SSE -> print_sse_transport_state(transport_pid, transport_state, verbose)
-        STDIO -> print_stdio_transport_state(transport_pid, transport_state, verbose)
-        StreamableHTTP -> print_streamable_http_transport_state(transport_pid, transport_state, verbose)
-        _ -> print_unknown_transport_state(transport_pid, transport_state, verbose)
+        SSE ->
+          print_sse_transport_state(transport_pid, transport_state, verbose)
+
+        STDIO ->
+          print_stdio_transport_state(transport_pid, transport_state, verbose)
+
+        StreamableHTTP ->
+          print_streamable_http_transport_state(
+            transport_pid,
+            transport_state,
+            verbose
+          )
+
+        _ ->
+          print_unknown_transport_state(transport_pid, transport_state, verbose)
       end
     else
       IO.puts(
@@ -168,7 +183,9 @@ defmodule Mix.Interactive.State do
 
   defp print_sse_transport_state(pid, state, verbose) do
     IO.puts("\n#{UI.colors().success}SSE Transport State (#{inspect(pid)}):#{UI.colors().reset}")
+
     IO.puts("  #{UI.colors().info}Server URL:#{UI.colors().reset} #{state[:server_url]}")
+
     IO.puts("  #{UI.colors().info}SSE URL:#{UI.colors().reset} #{state[:sse_url]}")
 
     print_sse_connection_status(state)
@@ -194,6 +211,7 @@ defmodule Mix.Interactive.State do
   defp print_sse_connection_status(state) do
     if state[:message_url] do
       IO.puts("  #{UI.colors().info}Message URL:#{UI.colors().reset} #{state[:message_url]}")
+
       IO.puts("  #{UI.colors().success}Status:#{UI.colors().reset} Connected")
     else
       IO.puts("  #{UI.colors().warning}Status:#{UI.colors().reset} Connecting/Not connected")
@@ -204,12 +222,14 @@ defmodule Mix.Interactive.State do
     if state[:stream_task] do
       task = state[:stream_task]
       status = if Process.alive?(task.pid), do: "alive", else: "dead"
+
       IO.puts("  #{UI.colors().info}Stream Task:#{UI.colors().reset} #{inspect(task.pid)} (#{status})")
     end
   end
 
   defp print_stdio_transport_state(pid, state, verbose) do
     IO.puts("\n#{UI.colors().success}STDIO Transport State (#{inspect(pid)}):#{UI.colors().reset}")
+
     IO.puts("  #{UI.colors().info}Command:#{UI.colors().reset} #{state.command}")
 
     print_stdio_args(state)
@@ -237,7 +257,9 @@ defmodule Mix.Interactive.State do
   defp print_stdio_connection_status(state) do
     if state.port do
       status = if Port.info(state.port), do: "open", else: "closed"
+
       IO.puts("  #{UI.colors().info}Port:#{UI.colors().reset} #{inspect(state.port)} (#{status})")
+
       IO.puts("  #{UI.colors().success}Status:#{UI.colors().reset} Connected")
     else
       IO.puts("  #{UI.colors().warning}Status:#{UI.colors().reset} Not connected")
@@ -246,6 +268,7 @@ defmodule Mix.Interactive.State do
 
   defp print_streamable_http_transport_state(pid, state, verbose) do
     IO.puts("\n#{UI.colors().success}Streamable HTTP Transport State (#{inspect(pid)}):#{UI.colors().reset}")
+
     IO.puts("  #{UI.colors().info}MCP URL:#{UI.colors().reset} #{URI.to_string(state.mcp_url)}")
 
     print_streamable_http_session_status(state)
@@ -270,6 +293,7 @@ defmodule Mix.Interactive.State do
   defp print_streamable_http_session_status(state) do
     if state.session_id do
       IO.puts("  #{UI.colors().info}Session ID:#{UI.colors().reset} #{state.session_id}")
+
       IO.puts("  #{UI.colors().success}Status:#{UI.colors().reset} Connected with session")
     else
       IO.puts("  #{UI.colors().info}Status:#{UI.colors().reset} Connected (no session)")

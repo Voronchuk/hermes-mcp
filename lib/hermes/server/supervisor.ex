@@ -1,59 +1,5 @@
 defmodule Hermes.Server.Supervisor do
-  @moduledoc """
-  Supervisor for MCP server processes.
-
-  This supervisor manages the lifecycle of an MCP server, including:
-  - The Base server process that handles MCP protocol
-  - The transport layer (STDIO, StreamableHTTP, or SSE)
-  - Session supervisors for StreamableHTTP transport
-
-  The supervision strategy is `:one_for_all`, meaning if any child
-  process crashes, all processes are restarted to maintain consistency.
-
-  ## Conditional Startup
-
-  The supervisor intelligently handles startup based on transport type:
-
-  - **STDIO transport**: Always starts
-  - **StreamableHTTP/SSE transport**: Conditional startup based on:
-    1. Explicit `:start` option in transport config (highest priority)
-    2. `HERMES_MCP_SERVER` environment variable present
-    3. `PHX_SERVER` environment variable present, for phoenix apps using releases
-    4. Phoenix `:serve_endpoints` internalr runtime config (usage with `mix phx.server`)
-    5. Default: `true` (starts by default in production releases)
-
-  This ensures MCP servers start correctly in all environments:
-  - Mix releases: Use `PHX_SERVER=true` or `HERMES_MCP_SERVER=true`
-  - Development: Use `mix phx.server`
-  - Tests/Tasks: Servers don't start unless explicitly configured
-
-  ## Configuration Examples
-
-  ```elixir
-  # Force start with transport option (highest priority)
-  {MyServer, transport: {:streamable_http, start: true}}
-
-  # Control via environment variables (works in releases)
-  PHX_SERVER=true ./my_app start
-  ```
-
-  ## Supervision Tree
-
-  For STDIO transport:
-  ```
-  Supervisor
-  ├── Base Server
-  └── STDIO Transport
-  ```
-
-  For StreamableHTTP transport:
-  ```
-  Supervisor
-  ├── Session.Supervisor
-  ├── Base Server
-  └── StreamableHTTP Transport
-  ```
-  """
+  @moduledoc false
 
   use Supervisor, restart: :permanent
 
@@ -68,20 +14,26 @@ defmodule Hermes.Server.Supervisor do
 
   @type transport :: :stdio | stream_http | sse | StubTransport
 
-  @type start_option :: {:transport, transport} | {:name, Supervisor.name()} | {:session_idle_timeout, pos_integer()}
+  @type start_option ::
+          {:transport, transport}
+          | {:name, Supervisor.name()}
+          | {:session_idle_timeout, pos_integer() | nil}
+          | {:request_timeout, pos_integer() | nil}
+          | {:server_name, GenServer.name() | nil}
 
   @doc """
   Starts the server supervisor.
 
   ## Parameters
 
-    * `server` - The module implementing `Hermes.Server.Behaviour`
-    * `init_arg` - Argument passed to the server's `init/1` callback
+    * `server` - The module implementing `Hermes.Server`
     * `opts` - Options including:
       * `:transport` - Transport configuration (required)
       * `:name` - Supervisor name (optional, defaults to registered name)
       * `:registry` - The custom registry to use to manage processes names (defaults to `Hermes.Server.Registry`)
       * `:session_idle_timeout` - Time in milliseconds before idle sessions expire (default: 30 minutes)
+      * `:request_timeout` - Time limit in miliseconds for server requests timeout (defaults to 30s)
+      * `:server_name` - Custom server name, non derived from the `server_module`
 
   ## Examples
 
@@ -99,11 +51,11 @@ defmodule Hermes.Server.Supervisor do
         session_idle_timeout: :timer.minutes(15)
       )
   """
-  @spec start_link(server :: module, init_arg :: term, list(start_option)) :: Supervisor.on_start()
-  def start_link(server, init_arg, opts) when is_atom(server) and is_list(opts) do
+  @spec start_link(server :: module, list(start_option)) :: Supervisor.on_start()
+  def start_link(server, opts) when is_atom(server) and is_list(opts) do
     registry = Keyword.get(opts, :registry, Hermes.Server.Registry)
     name = Keyword.get(opts, :name, registry.supervisor(server))
-    opts = Keyword.merge(opts, module: server, init_arg: init_arg, registry: registry)
+    opts = Keyword.merge(opts, module: server, registry: registry)
     Supervisor.start_link(__MODULE__, opts, name: name)
   end
 
@@ -111,20 +63,18 @@ defmodule Hermes.Server.Supervisor do
   def init(opts) do
     server = Keyword.fetch!(opts, :module)
     transport = normalize_transport(Keyword.fetch!(opts, :transport))
-    init_arg = Keyword.fetch!(opts, :init_arg)
     registry = Keyword.fetch!(opts, :registry)
 
     if should_start?(transport) do
       {layer, transport_opts} = parse_transport_child(transport, server, registry)
 
-      server_name = registry.server(server)
+      server_name = registry.server(opts[:server_name] || server)
       server_transport = [layer: layer, name: transport_opts[:name]]
 
       server_opts = [
         module: server,
         name: server_name,
         transport: server_transport,
-        init_arg: init_arg,
         registry: registry
       ]
 
@@ -135,7 +85,18 @@ defmodule Hermes.Server.Supervisor do
           server_opts
         end
 
+      request_timeout = Keyword.get(opts, :request_timeout, to_timeout(second: 30))
+
+      task_supervisor = registry.task_supervisor(server)
+
+      transport_opts =
+        Keyword.merge(transport_opts,
+          request_timeout: request_timeout,
+          task_supervisor: task_supervisor
+        )
+
       children = [
+        {Task.Supervisor, name: task_supervisor},
         {Session.Supervisor, server: server, registry: registry},
         {Base, server_opts},
         {layer, transport_opts}
@@ -149,6 +110,8 @@ defmodule Hermes.Server.Supervisor do
 
   defp normalize_transport(t) when t in [:stdio, StubTransport], do: t
   defp normalize_transport(t) when t in ~w(sse streamable_http)a, do: {t, []}
+
+  defp normalize_transport({t, opts}) when t in ~w(sse streamable_http)a, do: {t, opts}
 
   if Mix.env() == :test do
     defp parse_transport_child(StubTransport = kind, server, registry) do
@@ -171,6 +134,13 @@ defmodule Hermes.Server.Supervisor do
   end
 
   defp parse_transport_child({:sse, opts}, server, registry) do
+    IO.warn(
+      "The :sse transport option is deprecated as of MCP specification 2025-03-26. " <>
+        "Please use {:streamable_http, opts} instead. " <>
+        "The SSE transport is maintained only for backward compatibility with MCP protocol version 2024-11-05.",
+      []
+    )
+
     name = registry.transport(server, :sse)
     opts = Keyword.merge(opts, name: name, server: server, registry: registry)
     {SSE, opts}
@@ -196,6 +166,8 @@ defmodule Hermes.Server.Supervisor do
   end
 
   defp check_phoenix_config do
-    Application.get_env(:phoenix, :serve_endpoints, false)
+    phoenix_start? = Application.get_env(:phoenix, :serve_endpoints)
+
+    if is_nil(phoenix_start?), do: true, else: phoenix_start?
   end
 end

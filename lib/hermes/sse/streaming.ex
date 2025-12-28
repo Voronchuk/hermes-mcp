@@ -2,8 +2,12 @@ if Code.ensure_loaded?(Plug) do
   defmodule Hermes.SSE.Streaming do
     @moduledoc false
 
-    alias Hermes.Logging
+    use Hermes.Logging
+
     alias Hermes.SSE.Event
+
+    # SSE keepalive interval (30 seconds) to prevent proxy/firewall timeouts
+    @keepalive_interval 30_000
 
     @type conn :: Plug.Conn.t()
     @type transport :: GenServer.server()
@@ -58,7 +62,8 @@ if Code.ensure_loaded?(Plug) do
 
     This is useful for sending events outside of the main loop.
     """
-    @spec send_event(conn, binary(), non_neg_integer()) :: {:ok, conn} | {:error, term()}
+    @spec send_event(conn, binary(), non_neg_integer()) ::
+            {:ok, conn} | {:error, term()}
     def send_event(conn, data, event_id) when is_binary(data) do
       event = %Event{
         id: to_string(event_id),
@@ -84,10 +89,7 @@ if Code.ensure_loaded?(Plug) do
             {:error, reason} ->
               Logging.transport_event(
                 "sse_send_failed",
-                %{
-                  session_id: session_id,
-                  reason: reason
-                },
+                %{session_id: session_id, reason: reason},
                 level: :error
               )
 
@@ -105,14 +107,23 @@ if Code.ensure_loaded?(Plug) do
         msg ->
           Logging.transport_event(
             "sse_unknown_message",
-            %{
-              session_id: session_id,
-              message: inspect(msg)
-            },
+            %{session_id: session_id, message: inspect(msg)},
             level: :warning
           )
 
           loop(conn, transport, session_id, event_counter)
+      after
+        @keepalive_interval ->
+          # Send SSE comment as keepalive (: prefix is SSE comment, ignored by clients)
+          case Plug.Conn.chunk(conn, ": keepalive\n\n") do
+            {:ok, conn} ->
+              loop(conn, transport, session_id, event_counter)
+
+            {:error, _reason} ->
+              # Connection closed by client
+              Logging.transport_event("sse_keepalive_failed", %{session_id: session_id})
+              conn
+          end
       end
     end
   end

@@ -1,7 +1,8 @@
 import Config
 
 config :echo,
-  generators: [timestamp_type: :utc_datetime]
+  generators: [timestamp_type: :utc_datetime],
+  mcp_transport: :sse
 
 config :echo, EchoWeb.Endpoint,
   url: [host: "localhost"],
@@ -20,7 +21,7 @@ config :logger, :console,
 config :phoenix, :json_library, JSON
 
 config :mime, :types, %{
-  "text/event-stream" => ["event-stream"],
+  "text/event-stream" => ["event-stream"]
 }
 
 import_config "#{config_env()}.exs"
